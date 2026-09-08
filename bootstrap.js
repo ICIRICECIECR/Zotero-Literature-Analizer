@@ -78,14 +78,13 @@ var TraeLitInterp = {
   /******************* Menu Integration *******************/
 
   addToWindow: function (win) {
-    if (this._menuRegistered) return;
-
-    if (Zotero.MenuManager && Zotero.MenuManager.registerMenu) {
-      Zotero.debug("[Trae Lit Interp] Using MenuManager API");
-      this._registerMenuAPI(win);
-    } else {
-      Zotero.debug("[Trae Lit Interp] Falling back to legacy menu injection");
+    // 使用经过验证的 DOM 注入方式注册右键菜单（zotero-itemmenu）。
+    // 不用全局 flag 阻断：每个窗口独立注册，靠 DOM id 去重，天然支持多窗口。
+    // （MenuManager 子菜单参数结构在不同版本有差异、易静默失败，故统一走 DOM 方式）
+    try {
       this._registerMenuLegacy(win);
+    } catch (e) {
+      Zotero.debug("[Trae Lit Interp] addToWindow error: " + e);
     }
   },
 
@@ -577,6 +576,21 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
 
   try {
     TraeLitInterp.init({ id: id, version: version, rootURI: rootURI });
+
+    // 主动对所有「已打开」的主窗口注册菜单。
+    // 不单纯依赖 onMainWindowLoad 钩子（插件启动时窗口可能已加载完毕，钩子不再触发），
+    // 这里枚举已有窗口 + onMainWindowLoad 处理未来窗口，双保险。
+    var wins = Zotero.getMainWindows();
+    Zotero.debug("[Trae Lit Interp] getMainWindows count: " + (wins ? wins.length : 0));
+    if (wins) {
+      for (var i = 0; i < wins.length; i++) {
+        try {
+          TraeLitInterp.addToWindow(wins[i]);
+        } catch (e) {
+          Zotero.debug("[Trae Lit Interp] addToWindow failed for window " + i + ": " + e);
+        }
+      }
+    }
   } catch (e) {
     Zotero.debug("[Trae Lit Interp] Startup error: " + e);
   }
