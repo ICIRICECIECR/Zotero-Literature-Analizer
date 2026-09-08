@@ -1,15 +1,24 @@
 name: Release Zotero Plugin
 
 on:
+  # 推送 main 时自动发版：读取 manifest.json 版本号，
+  # 若该版本还没有 Release，就自动建 tag + 打包 xpi + 发 Release。
+  # 日常发版只需：改 manifest.json 版本号 -> commit -> push main。
   push:
-    tags:
-      - 'v*'  # 只有 v1.0.0, v2.1.3 这样的 tag 才触发
-  workflow_dispatch:  # 网页上手动点 Run workflow 也能触发
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - '.gitignore'
+  # 网页上也可以手动触发（可选指定 tag）
+  workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag 名称（例如 v1.0.1），用于自动创建 Release'
-        required: true
-        default: 'v1.0.2'
+        description: 'Tag 名称（例如 v1.0.4）；留空则自动用 manifest 版本号'
+        required: false
+        default: ''
 
 permissions:
   contents: write  # 需要写 Release 权限
@@ -20,28 +29,44 @@ jobs:
     steps:
       - name: 🔍 Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 📖 Read manifest version
-        id: version
+      - name: 🧮 Determine version and tag
+        id: meta
         run: |
           VERSION=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
-          XPI_NAME="trae-lit-interp-${VERSION}.xpi"
-          # 兼容两种触发方式：push tag 用 GITHUB_REF_NAME，手动触发用 inputs.tag
+          # 手动触发且指定 tag 用指定的；否则用 manifest 版本号自动推导 vX.Y.Z
           if [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
-            TAG="${GITHUB_REF_NAME}"
+            TAG="v${VERSION}"
           fi
+          XPI_NAME="trae-lit-interp-${VERSION}.xpi"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "xpi_name=${XPI_NAME}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "xpi_name=${XPI_NAME}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}, Tag: ${TAG}, XPI: ${XPI_NAME}"
 
-      - name: 📦 Build XPI (ZIP)
+      - name: � Check whether release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release ${TAG} 已存在，跳过本次发布。"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release ${{ steps.meta.outputs.tag }} 不存在，开始自动发布。"
+          fi
+
+      - name: �📦 Build XPI (ZIP)
+        if: steps.check.outputs.exists == 'false'
         run: |
           cd "${{ github.workspace }}"
-          # 把 XPI 看作 ZIP 文件，直接打包所有源码（排除 .git 等）
-          zip -r "${{ steps.version.outputs.xpi_name }}" \
+          # 只打包运行时必需文件
+          zip -r "${{ steps.meta.outputs.xpi_name }}" \
             manifest.json \
             bootstrap.js \
             prefs.js \
@@ -53,16 +78,18 @@ jobs:
             README.md \
             .gitignore \
             -x "*.DS_Store"
-          ls -la "${{ steps.version.outputs.xpi_name }}"
+          ls -la "${{ steps.meta.outputs.xpi_name }}"
 
       - name: 🔐 Compute SHA256 hash
+        if: steps.check.outputs.exists == 'false'
         id: hash
         run: |
-          HASH=$(sha256sum "${{ steps.version.outputs.xpi_name }}" | awk '{print $1}')
+          HASH=$(sha256sum "${{ steps.meta.outputs.xpi_name }}" | awk '{print $1}')
           echo "hash=${HASH}" >> "$GITHUB_OUTPUT"
           echo "SHA256: ${HASH}"
 
       - name: ✏️ Update update.json
+        if: steps.check.outputs.exists == 'false'
         run: |
           python3 << 'PYEOF'
           import json, os
@@ -78,7 +105,7 @@ jobs:
 
           updates = data["addons"]["trae-lit-interp@example.com"]["updates"]
 
-          # 检查有没有重复版本
+          # 去掉同版本旧条目
           existing = [u for u in updates if u["version"] == version]
           for old in existing:
             updates.remove(old)
@@ -106,32 +133,25 @@ jobs:
           print(f"update_hash: {new_entry['update_hash']}")
           PYEOF
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
-          XPI_NAME: ${{ steps.version.outputs.xpi_name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          XPI_NAME: ${{ steps.meta.outputs.xpi_name }}
           HASH: ${{ steps.hash.outputs.hash }}
           URL: ${{ github.repository }}
 
-      - name: 📤 Commit update.json
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add update.json
-          git commit -m "chore: update update.json for release ${{ steps.version.outputs.tag }}" || true
-          git push origin HEAD:main
-
-      - name: 🚀 Create GitHub Release
+      - name: � Create GitHub Release (auto creates tag)
+        if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: v${{ steps.version.outputs.version }} — ${{ steps.version.outputs.tag }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: v${{ steps.meta.outputs.version }} — ${{ steps.meta.outputs.tag }}
           body: |
-            ## 📚 Trae Literature Interpretation v${{ steps.version.outputs.version }}
+            ## 📚 Trae Literature Interpretation v${{ steps.meta.outputs.version }}
 
             > Zotero 7+ 插件：一键生成 10 板块结构化文献解读 HTML 报告
 
             ### 🔑 安装方法
-            1. 下载下方 `${{ steps.version.outputs.xpi_name }}`
+            1. 下载下方 `${{ steps.meta.outputs.xpi_name }}`
             2. Zotero → 工具 → 附加组件 (Ctrl+Shift+A)
             3. 齿轮 → 从文件安装附加组件 → 选择 xpi
             4. 重启 Zotero
@@ -141,8 +161,17 @@ jobs:
             ${{ steps.hash.outputs.hash }}
             ```
           files: |
-            ${{ steps.version.outputs.xpi_name }}
+            ${{ steps.meta.outputs.xpi_name }}
             update.json
           draft: false
           prerelease: false
           generate_release_notes: true
+
+      - name: 📤 Commit update.json back to main
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update.json
+          git commit -m "chore: update update.json for release ${{ steps.meta.outputs.tag }}" || true
+          git push origin HEAD:main
