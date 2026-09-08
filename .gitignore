@@ -1,0 +1,26 @@
+# Build artifacts (uncomment to ignore local build outputs)
+# *.xpi
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test output
+test-output/
+figures/
+*.html.bak

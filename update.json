@@ -1,0 +1,19 @@
+{
+  "addons": {
+    "trae-lit-interp@example.com": {
+      "updates": [
+        {
+          "version": "1.0.0",
+          "update_link": "https://raw.githubusercontent.com/ICIRICECIECR/Zotero-Literature-Analizer/main/trae-lit-interp-1.0.0.xpi",
+          "update_hash": "",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0",
+              "strict_max_version": "10.*"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
