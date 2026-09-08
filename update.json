@@ -4,8 +4,8 @@
       "updates": [
         {
           "version": "1.0.1",
-          "update_link": "https://github.com/ICIRICECIECR/Zotero-Literature-Analizer/releases/download/v1.0.1/trae-lit-interp-1.0.1.xpi",
-          "update_hash": "sha256:7299a714cfc04537aa990213ba79aa76eb0eae1ad9211557b8e3b284af4b6faa",
+          "update_link": "https://github.com/ICIRICECIECR/Zotero-Literature-Analizer/releases/download/v1.0.2/trae-lit-interp-1.0.1.xpi",
+          "update_hash": "sha256:b206d0676e34c438878179b8083f5fb9ebc4c983579283a14c99e39c88fcaca5",
           "applications": {
             "zotero": {
               "strict_min_version": "7.0",
