@@ -1,5 +1,5 @@
-# Build artifacts (uncomment to ignore local build outputs)
-# *.xpi
+# Build artifacts (XPI 由 CI 自动构建为 Release 资产，不入库)
+*.xpi
 *.zip
 
 # Python

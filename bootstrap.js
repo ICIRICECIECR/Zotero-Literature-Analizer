@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.1",
+  _version: "1.0.3",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
