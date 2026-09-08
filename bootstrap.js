@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.0",
+  _version: "1.0.1",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -561,12 +561,20 @@ var TraeLitInterp = {
 
 /******************* Bootstrap Lifecycle (Zotero 7+) *******************/
 
-function install({ id, version, rootURI }) {
-  Zotero.debug("[Trae Lit Interp] Installed " + version);
+function install(data, reason) {
+  Zotero.debug("[Trae Lit Interp] Installed " + (data ? data.version : "?"));
 }
 
-async function startup({ id, version, rootURI }) {
+async function startup({ id, version, resourceURI, rootURI }, reason) {
+  // 关键！等待 Zotero 核心完全初始化
+  await Zotero.initializationPromise;
   Zotero.debug("[Trae Lit Interp] Starting up " + version);
+
+  // rootURI 在 Zotero 7+ 可用，回退到 resourceURI（兼容旧版本）
+  if (!rootURI && resourceURI) {
+    rootURI = resourceURI.spec;
+  }
+
   try {
     TraeLitInterp.init({ id: id, version: version, rootURI: rootURI });
   } catch (e) {
@@ -574,7 +582,7 @@ async function startup({ id, version, rootURI }) {
   }
 }
 
-function onMainWindowLoad({ window }) {
+async function onMainWindowLoad({ window }, reason) {
   try {
     TraeLitInterp.addToWindow(window);
   } catch (e) {
@@ -582,7 +590,7 @@ function onMainWindowLoad({ window }) {
   }
 }
 
-function onMainWindowUnload({ window }) {
+async function onMainWindowUnload({ window }, reason) {
   try {
     TraeLitInterp.removeFromWindow(window);
   } catch (e) {
@@ -590,7 +598,11 @@ function onMainWindowUnload({ window }) {
   }
 }
 
-function shutdown() {
+function shutdown({ id, version, resourceURI, rootURI }, reason) {
+  // APP_SHUTDOWN 时不做清理，避免延迟 Zotero 退出
+  if (reason === APP_SHUTDOWN) {
+    return;
+  }
   Zotero.debug("[Trae Lit Interp] Shutting down");
   if (TraeLitInterp._menuRegistered && Zotero.MenuManager && Zotero.MenuManager.unregisterMenu) {
     try {
@@ -603,6 +615,6 @@ function shutdown() {
   TraeLitInterp._menuRegistered = false;
 }
 
-function uninstall() {
+function uninstall(data, reason) {
   Zotero.debug("[Trae Lit Interp] Uninstalled");
 }
