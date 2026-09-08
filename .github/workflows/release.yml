@@ -65,13 +65,13 @@ jobs:
       - name: ✏️ Update update.json
         run: |
           python3 << 'PYEOF'
-          import json, sys, hashlib
+          import json, os
 
-          version = sys.argv[1]
-          tag = sys.argv[2]
-          xpi_name = sys.argv[3]
-          hash_val = sys.argv[4]
-          url = sys.argv[5]
+          version = os.environ["VERSION"]
+          tag = os.environ["TAG"]
+          xpi_name = os.environ["XPI_NAME"]
+          hash_val = os.environ["HASH"]
+          url = os.environ["URL"]
 
           with open("update.json") as f:
             data = json.load(f)
