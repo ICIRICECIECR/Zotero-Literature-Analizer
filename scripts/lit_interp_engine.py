@@ -879,11 +879,21 @@ def _build_meta_table(paper_title, meta):
             + "".join(rows) + '</table>')
 
 
-def _md_to_html(content):
-    """把 LLM 输出的 markdown 文本转换为 HTML 片段（转义 + 表格/列表/引用/标题等）。"""
-    # HTML 转义 LLM 原始内容（先 & 后 <），防止 p<0.05 / A & B 等文本破坏 HTML 结构
-    content = content.replace("&", "&amp;").replace("<", "&lt;")
+def _escape_html(content):
+    """转义 LLM 原始内容中的 & 和 <，防止 p<0.05 / A & B 等文本破坏 HTML 结构。
 
+    只做转义，不做结构转换——这样调用方可以先在纯文本上插入图片 HTML，
+    再做 markdown 结构转换，避免已插入的 <img>/<div> 标签被转义成文本。
+    """
+    return content.replace("&", "&amp;").replace("<", "&lt;")
+
+
+def _md_convert(content):
+    """把（已转义的）markdown 文本转换为 HTML 结构（表格/粗体/斜体/标题/列表/引用/段落）。
+
+    注意：入参必须已经过 _escape_html 转义；本函数不再转义，
+    以免把调用方先行插入的 HTML 标签（如图片块）转义成文本。
+    """
     # Convert markdown tables to HTML
     content = _convert_markdown_tables(content)
 
@@ -918,6 +928,11 @@ def _md_to_html(content):
     return content
 
 
+def _md_to_html(content):
+    """转义 + markdown 转换（供无图片插入的场景，如多篇对比报告使用）。"""
+    return _md_convert(_escape_html(content))
+
+
 def generate_html(sections, figures, paper_title="文献解读", meta=None):
     """Generate self-contained HTML with base64-embedded images.
 
@@ -940,13 +955,16 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
         title = sections.get(i, {}).get("title", SECTION_TITLES[i-1])
         content = sections.get(i, {}).get("content", "（待补充）")
 
+        # 先转义 LLM 原始内容，再在纯文本上做后续处理
+        content = _escape_html(content)
+
         # sec1 论文基本信息：用 meta 构建结构化表格（参考文件风格）
         if i == 1:
             meta_table = _build_meta_table(paper_title, meta)
             if meta_table:
                 content = meta_table + "\n" + content
 
-        # Insert figures in section 4 (核心结果)
+        # Insert figures in section 4 (核心结果)：在转义后、markdown 转换前的纯文本上定位
         if i == 4 and figures:
             content = _insert_figures_into_content(content, figures)
 
@@ -956,9 +974,9 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
             if flow:
                 content = flow
             else:
-                content = _md_to_html(content)
+                content = _md_convert(content)
         else:
-            content = _md_to_html(content)
+            content = _md_convert(content)
 
         open_attr = " open" if i == 1 else ""
         accordion += f'''
