@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.12",
+  _version: "1.0.13",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -333,7 +333,8 @@ var TraeLitInterp = {
 
       if (exitCode !== 0) {
         progressWin.close();
-        this._notify(win, "Python脚本执行失败 (exit " + exitCode + ")", "error");
+        var errDetail = this._lastStderr ? "\n\n" + this._lastStderr : "";
+        this._notify(win, "Python脚本执行失败 (exit " + exitCode + ")" + errDetail, "error");
         return;
       }
 
@@ -541,10 +542,21 @@ var TraeLitInterp = {
     }
     var proc = await Subprocess.call({
       command: command,
-      arguments: args
+      arguments: args,
+      stdout: "pipe",
+      stderr: "pipe"
     });
     // exitCode 只是普通属性（初始 null），真正的退出码要等 wait() 返回
     var result = await proc.wait();
+    // 读取 stderr，失败时用于展示具体错误原因（如 API error / 缺参数）
+    var stderrText = "";
+    try {
+      var errBytes = await proc.stderr.read();
+      stderrText = new TextDecoder().decode(errBytes);
+    } catch (e) {
+      stderrText = "";
+    }
+    this._lastStderr = stderrText.trim();
     return result.exitCode;
   },
 
