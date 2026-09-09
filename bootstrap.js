@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.6",
+  _version: "1.0.7",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -69,7 +69,7 @@ var TraeLitInterp = {
   },
 
   _copyScript: async function () {
-    await IOUtils.makeDir(this._scriptDir, { createParent: true });
+    await IOUtils.makeDirectory(this._scriptDir, { createParent: true });
     var scriptURL = this._rootURI + "scripts/lit_interp_engine.py";
     var response = await fetch(scriptURL);
     var scriptContent = await response.text();
@@ -79,7 +79,7 @@ var TraeLitInterp = {
   },
 
   _copyUpdateManifest: async function () {
-    await IOUtils.makeDir(this._scriptDir, { createParent: true });
+    await IOUtils.makeDirectory(this._scriptDir, { createParent: true });
     var updateURL = this._rootURI + "update.json";
     var response = await fetch(updateURL);
     var updateContent = await response.text();
@@ -338,7 +338,7 @@ var TraeLitInterp = {
     try {
       var pdfPath = await sel.attachment.getFilePathAsync();
       var workDir = PathUtils.join(this._scriptDir, "work_" + Date.now());
-      await IOUtils.makeDir(workDir, { createParent: true });
+      await IOUtils.makeDirectory(workDir, { createParent: true });
 
       var outputPath = PathUtils.join(workDir, "template.html");
       var promptPath = PathUtils.join(workDir, "prompt.txt");
