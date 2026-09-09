@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.27",
+  _version: "1.1.0",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -58,7 +58,9 @@ var TraeLitInterp = {
       "apiKey": "",
       "apiBase": "https://api.deepseek.com/v1",
       "model": "deepseek-chat",
-      "updateSource": defaultUpdatePath
+      "provider": "deepseek",
+      "updateSource": defaultUpdatePath,
+      "doneTag": "已解读"
     };
     for (var key in defaults) {
       var prefKey = "extensions.trae-lit-interp." + key;
@@ -120,9 +122,23 @@ var TraeLitInterp = {
             menus: [
               {
                 menuType: "menuitem",
-                label: "自动生成解读 (DeepSeek API)",
+                label: "自动生成解读 (单篇)",
                 onCommand: function (event, context) {
                   self.generateAuto(win);
+                }
+              },
+              {
+                menuType: "menuitem",
+                label: "批量生成解读 (多选条目)",
+                onCommand: function (event, context) {
+                  self.generateBatch(win);
+                }
+              },
+              {
+                menuType: "menuitem",
+                label: "多篇对比报告 (选2-3篇)",
+                onCommand: function (event, context) {
+                  self.generateCompare(win);
                 }
               },
               {
@@ -185,11 +201,27 @@ var TraeLitInterp = {
 
     var autoItem = doc.createXULElement("menuitem");
     autoItem.setAttribute("id", "trae-lit-interp-auto");
-    autoItem.setAttribute("label", "自动生成解读 (DeepSeek API)");
+    autoItem.setAttribute("label", "自动生成解读 (单篇)");
     autoItem.addEventListener("command", function () {
       TraeLitInterp.generateAuto(win);
     });
     subPopup.appendChild(autoItem);
+
+    var batchItem = doc.createXULElement("menuitem");
+    batchItem.setAttribute("id", "trae-lit-interp-batch");
+    batchItem.setAttribute("label", "批量生成解读 (多选条目)");
+    batchItem.addEventListener("command", function () {
+      TraeLitInterp.generateBatch(win);
+    });
+    subPopup.appendChild(batchItem);
+
+    var compareItem = doc.createXULElement("menuitem");
+    compareItem.setAttribute("id", "trae-lit-interp-compare");
+    compareItem.setAttribute("label", "多篇对比报告 (选2-3篇)");
+    compareItem.addEventListener("command", function () {
+      TraeLitInterp.generateCompare(win);
+    });
+    subPopup.appendChild(compareItem);
 
     var exportItem = doc.createXULElement("menuitem");
     exportItem.setAttribute("id", "trae-lit-interp-export");
@@ -255,9 +287,11 @@ var TraeLitInterp = {
     var zoteroPane = win.ZoteroPane || Zotero.getActiveZoteroPane();
     var items = zoteroPane.getSelectedItems();
     if (!items || items.length === 0) return null;
+    return this._pdfFromItem(items[0]);
+  },
 
-    var item = items[0];
-
+  // 从单个条目提取 PDF 附件信息（普通条目取其第一个 PDF 附件；附件本身则回溯父条目）
+  _pdfFromItem: function (item) {
     if (item.isRegularItem()) {
       var attachments = item.getAttachments();
       for (var i = 0; i < attachments.length; i++) {
@@ -266,6 +300,7 @@ var TraeLitInterp = {
           return { parentItem: item, attachment: att };
         }
       }
+      return null;
     }
 
     if (item.isAttachment() && item.attachmentContentType === "application/pdf") {
@@ -285,7 +320,7 @@ var TraeLitInterp = {
 
     var apiKey = Zotero.Prefs.get("extensions.trae-lit-interp.apiKey", true);
     if (!apiKey) {
-      this._notify(win, "未设置 DeepSeek API Key，请在设置中配置", "error");
+      this._notify(win, "未设置 LLM API Key，请在设置中配置", "error");
       this.openSettings(win);
       return;
     }
@@ -293,62 +328,11 @@ var TraeLitInterp = {
     var progressWin = this._showProgress(win, "正在生成文献解读...");
 
     try {
-      var pdfPath = await sel.attachment.getFilePathAsync();
-
-      // 从 Zotero 条目取论文元数据：用于文件命名 + Hero 展示
-      var item = sel.parentItem;
-      var paperTitle = (item.getField("title") || "").trim();
-      var creators = item.getCreators() || [];
-      var authorNames = [];
-      for (var c = 0; c < creators.length && c < 5; c++) {
-        var nm = creators[c].lastName || creators[c].name || "";
-        if (nm) authorNames.push(nm);
-      }
-      var authorsStr = authorNames.join(", ");
-      if (creators.length > 5) authorsStr += " 等";
-      var journalStr = item.getField("publicationTitle") || item.getField("journalAbbreviation") || "";
-      var doiStr = item.getField("DOI") || "";
-
-      // 命名：文献解读_{论文标题}_{时间戳}.html（每次生成独立文件，保留历史版本）
-      var nameBase = paperTitle || PathUtils.filename(pdfPath).replace(/\.pdf$/i, "");
-      nameBase = nameBase.replace(/[<>:"/\\|?*]/g, "").replace(/\s+/g, " ").trim();
-      if (nameBase.length > 60) nameBase = nameBase.substring(0, 60).trim();
-      var now = new Date();
-      var pad2 = function (n) { return n < 10 ? "0" + n : "" + n; };
-      var ts = "" + now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
-               "_" + pad2(now.getHours()) + pad2(now.getMinutes());
-      var outputPath = PathUtils.join(PathUtils.parent(pdfPath), "文献解读_" + nameBase + "_" + ts + ".html");
-
-      var args = [
-        PathUtils.join(this._scriptDir, "lit_interp_engine.py"),
-        "--pdf", pdfPath,
-        "--output", outputPath,
-        "--mode", "auto",
-        "--api-key", apiKey,
-        "--api-base", Zotero.Prefs.get("extensions.trae-lit-interp.apiBase", true),
-        "--model", Zotero.Prefs.get("extensions.trae-lit-interp.model", true),
-        "--title", paperTitle,
-        "--authors", authorsStr,
-        "--journal", journalStr,
-        "--doi", doiStr
-      ];
-
-      var exitCode = await this._runPython(args);
-
-      if (exitCode !== 0) {
-        progressWin.close();
-        var errDetail = this._lastStderr ? "\n\n" + this._lastStderr : "";
-        this._notify(win, "Python脚本执行失败 (exit " + exitCode + ")" + errDetail, "error");
-        return;
-      }
-
+      var outputPath = await this._generateOne(win, sel, apiKey, function (line) {
+        progressWin.update(line);
+      });
       progressWin.close();
 
-      // 挂为链接附件（文件名带时间戳，每次生成都是独立新文件，历史版本全部保留）
-      await Zotero.Attachments.linkFromFile({
-        file: outputPath,
-        parentItemID: sel.parentItem.id
-      });
       // 资源管理器弹出定位，方便直接双击打开
       this._openFolder(outputPath);
       this._notify(win, "文献解读已生成: " + outputPath, "success");
@@ -357,6 +341,244 @@ var TraeLitInterp = {
       Zotero.debug("[Trae Lit Interp] Error: " + e);
       this._notify(win, "生成失败: " + e.message, "error");
     }
+  },
+
+  // 批量解读：对所有选中的条目按队列依次生成，进度窗口显示 (i/n)
+  generateBatch: async function (win) {
+    var zoteroPane = win.ZoteroPane || Zotero.getActiveZoteroPane();
+    var items = zoteroPane.getSelectedItems();
+    if (!items || items.length === 0) {
+      this._notify(win, "请先选中一个或多个条目", "error");
+      return;
+    }
+
+    // 收集所有带 PDF 的条目（按父条目去重，避免同一文献重复生成）
+    var queue = [];
+    var seenIds = {};
+    for (var i = 0; i < items.length; i++) {
+      var sel = this._pdfFromItem(items[i]);
+      if (!sel) continue;
+      if (seenIds[sel.parentItem.id]) continue;
+      seenIds[sel.parentItem.id] = true;
+      queue.push(sel);
+    }
+
+    if (queue.length === 0) {
+      this._notify(win, "选中的条目中没有包含PDF附件的文献", "error");
+      return;
+    }
+
+    var apiKey = Zotero.Prefs.get("extensions.trae-lit-interp.apiKey", true);
+    if (!apiKey) {
+      this._notify(win, "未设置 LLM API Key，请在设置中配置", "error");
+      this.openSettings(win);
+      return;
+    }
+
+    var total = queue.length;
+    var okCount = 0;
+    var failCount = 0;
+    var progressWin = this._showProgress(win, "批量解读 (0/" + total + ") 准备中...");
+
+    for (var q = 0; q < total; q++) {
+      var idx = q + 1;
+      var selItem = queue[q];
+      var shortTitle = (selItem.parentItem.getField("title") || "未命名").trim();
+      if (shortTitle.length > 30) shortTitle = shortTitle.substring(0, 30) + "...";
+      progressWin.update("批量解读 (" + idx + "/" + total + ") " + shortTitle);
+
+      try {
+        await this._generateOne(win, selItem, apiKey, function (line) {
+          progressWin.update("(" + idx + "/" + total + ") " + line);
+        });
+        okCount++;
+      } catch (e) {
+        failCount++;
+        Zotero.debug("[Trae Lit Interp] Batch item failed: " + e);
+      }
+    }
+
+    progressWin.close();
+    var summary = "批量解读完成：成功 " + okCount + " 篇" +
+                  (failCount > 0 ? "，失败 " + failCount + " 篇" : "");
+    this._notify(win, summary, failCount > 0 && okCount === 0 ? "error" : "success");
+  },
+
+  // 多篇对比报告：选 2-3 篇同主题论文，生成对比分析 HTML
+  generateCompare: async function (win) {
+    var zoteroPane = win.ZoteroPane || Zotero.getActiveZoteroPane();
+    var items = zoteroPane.getSelectedItems();
+    if (!items || items.length < 2) {
+      this._notify(win, "请选中 2-3 篇包含PDF附件的条目进行对比", "error");
+      return;
+    }
+
+    // 收集带 PDF 的条目（按父条目去重），最多取前 3 篇
+    var queue = [];
+    var seenIds = {};
+    for (var i = 0; i < items.length && queue.length < 3; i++) {
+      var sel = this._pdfFromItem(items[i]);
+      if (!sel) continue;
+      if (seenIds[sel.parentItem.id]) continue;
+      seenIds[sel.parentItem.id] = true;
+      queue.push(sel);
+    }
+
+    if (queue.length < 2) {
+      this._notify(win, "选中的条目中带PDF附件的不足 2 篇，无法对比", "error");
+      return;
+    }
+
+    var apiKey = Zotero.Prefs.get("extensions.trae-lit-interp.apiKey", true);
+    if (!apiKey) {
+      this._notify(win, "未设置 LLM API Key，请在设置中配置", "error");
+      this.openSettings(win);
+      return;
+    }
+
+    var progressWin = this._showProgress(win, "正在生成多篇对比报告...");
+
+    try {
+      // 组装论文清单（含元数据），写入临时 JSON 供 Python 读取
+      var papers = [];
+      var baseDir = "";
+      for (var q = 0; q < queue.length; q++) {
+        var s = queue[q];
+        var pdfPath = await s.attachment.getFilePathAsync();
+        if (!baseDir) baseDir = PathUtils.parent(pdfPath);
+        var it = s.parentItem;
+        var creators = it.getCreators() || [];
+        var authorNames = [];
+        for (var c = 0; c < creators.length && c < 5; c++) {
+          var nm = creators[c].lastName || creators[c].name || "";
+          if (nm) authorNames.push(nm);
+        }
+        var authorsStr = authorNames.join(", ");
+        if (creators.length > 5) authorsStr += " 等";
+        papers.push({
+          pdf: pdfPath,
+          title: (it.getField("title") || "").trim(),
+          authors: authorsStr,
+          journal: it.getField("publicationTitle") || it.getField("journalAbbreviation") || "",
+          doi: it.getField("DOI") || ""
+        });
+      }
+
+      var papersJsonPath = PathUtils.join(this._scriptDir, "compare_papers.json");
+      await IOUtils.write(papersJsonPath, new TextEncoder().encode(JSON.stringify(papers)));
+
+      // 输出命名：多篇对比_{首篇标题前20字}_{时间戳}.html
+      var nameBase = (papers[0].title || "对比报告").replace(/[<>:"/\\|?*]/g, "").trim();
+      if (nameBase.length > 20) nameBase = nameBase.substring(0, 20).trim();
+      var now = new Date();
+      var pad2 = function (n) { return n < 10 ? "0" + n : "" + n; };
+      var ts = "" + now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+               "_" + pad2(now.getHours()) + pad2(now.getMinutes()) + pad2(now.getSeconds());
+      var outputPath = PathUtils.join(baseDir, "多篇对比_" + nameBase + "_" + ts + ".html");
+
+      var args = [
+        PathUtils.join(this._scriptDir, "lit_interp_engine.py"),
+        "--output", outputPath,
+        "--mode", "compare",
+        "--papers-json", papersJsonPath,
+        "--api-key", apiKey,
+        "--api-base", Zotero.Prefs.get("extensions.trae-lit-interp.apiBase", true),
+        "--model", Zotero.Prefs.get("extensions.trae-lit-interp.model", true),
+        "--provider", Zotero.Prefs.get("extensions.trae-lit-interp.provider", true),
+        "--title", "多篇文献对比分析（" + papers.length + " 篇）"
+      ];
+
+      var exitCode = await this._runPython(args, function (line) {
+        progressWin.update(line);
+      });
+
+      progressWin.close();
+
+      if (exitCode !== 0) {
+        var errDetail = this._lastStderr ? "\n\n" + this._lastStderr : "";
+        this._notify(win, "对比报告生成失败 (exit " + exitCode + ")" + errDetail, "error");
+        return;
+      }
+
+      // 挂为链接附件到第一篇论文的父条目下
+      await Zotero.Attachments.linkFromFile({
+        file: outputPath,
+        parentItemID: queue[0].parentItem.id
+      });
+
+      this._openFolder(outputPath);
+      this._notify(win, "对比报告已生成: " + outputPath, "success");
+    } catch (e) {
+      progressWin.close();
+      Zotero.debug("[Trae Lit Interp] Compare error: " + e);
+      this._notify(win, "对比报告生成失败: " + e.message, "error");
+    }
+  },
+
+  // 单篇生成核心逻辑（单篇/批量共用）：调 Python 引擎 → 挂附件 → 打标签，返回输出路径
+  _generateOne: async function (win, sel, apiKey, onLine) {
+    var pdfPath = await sel.attachment.getFilePathAsync();
+
+    // 从 Zotero 条目取论文元数据：用于文件命名 + Hero 展示
+    var item = sel.parentItem;
+    var paperTitle = (item.getField("title") || "").trim();
+    var creators = item.getCreators() || [];
+    var authorNames = [];
+    for (var c = 0; c < creators.length && c < 5; c++) {
+      var nm = creators[c].lastName || creators[c].name || "";
+      if (nm) authorNames.push(nm);
+    }
+    var authorsStr = authorNames.join(", ");
+    if (creators.length > 5) authorsStr += " 等";
+    var journalStr = item.getField("publicationTitle") || item.getField("journalAbbreviation") || "";
+    var doiStr = item.getField("DOI") || "";
+
+    // 命名：文献解读_{论文标题}_{时间戳}.html（每次生成独立文件，保留历史版本）
+    var nameBase = paperTitle || PathUtils.filename(pdfPath).replace(/\.pdf$/i, "");
+    nameBase = nameBase.replace(/[<>:"/\\|?*]/g, "").replace(/\s+/g, " ").trim();
+    if (nameBase.length > 60) nameBase = nameBase.substring(0, 60).trim();
+    var now = new Date();
+    var pad2 = function (n) { return n < 10 ? "0" + n : "" + n; };
+    var ts = "" + now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+             "_" + pad2(now.getHours()) + pad2(now.getMinutes()) + pad2(now.getSeconds());
+    var outputPath = PathUtils.join(PathUtils.parent(pdfPath), "文献解读_" + nameBase + "_" + ts + ".html");
+
+    var args = [
+      PathUtils.join(this._scriptDir, "lit_interp_engine.py"),
+      "--pdf", pdfPath,
+      "--output", outputPath,
+      "--mode", "auto",
+      "--api-key", apiKey,
+      "--api-base", Zotero.Prefs.get("extensions.trae-lit-interp.apiBase", true),
+      "--model", Zotero.Prefs.get("extensions.trae-lit-interp.model", true),
+      "--provider", Zotero.Prefs.get("extensions.trae-lit-interp.provider", true),
+      "--title", paperTitle,
+      "--authors", authorsStr,
+      "--journal", journalStr,
+      "--doi", doiStr
+    ];
+
+    var exitCode = await this._runPython(args, onLine);
+
+    if (exitCode !== 0) {
+      var errDetail = this._lastStderr ? " | " + this._lastStderr : "";
+      throw new Error("Python脚本执行失败 (exit " + exitCode + ")" + errDetail);
+    }
+
+    // 挂为链接附件（文件名带时间戳，每次生成都是独立新文件，历史版本全部保留）
+    await Zotero.Attachments.linkFromFile({
+      file: outputPath,
+      parentItemID: sel.parentItem.id
+    });
+
+    // 自动打标签（标签名可在设置中自定义，留空则不打；addTag 自带去重）
+    var tagName = (Zotero.Prefs.get("extensions.trae-lit-interp.doneTag", true) || "").trim();
+    if (tagName) {
+      sel.parentItem.addTag(tagName, 0);
+      await sel.parentItem.saveTx();
+    }
+
+    return outputPath;
   },
 
   exportPDF: async function (win) {
@@ -509,7 +731,7 @@ var TraeLitInterp = {
 
   /******************* Utilities *******************/
 
-  _runPython: async function (args) {
+  _runPython: async function (args, onLine) {
     var pythonPath = Zotero.Prefs.get("extensions.trae-lit-interp.pythonPath", true) || "python";
 
     // 用 Firefox 平台 Subprocess 启动进程（Zotero 10 下 nsIProcess 旧 XPCOM 写法不可靠）。
@@ -533,12 +755,35 @@ var TraeLitInterp = {
         Zotero.debug("[Trae Lit Interp] where.exe resolve failed: " + e);
       }
     }
+    // -u 关闭 Python stdout 缓冲，保证阶段日志实时流出（进度窗口用）
     var proc = await Subprocess.call({
       command: command,
-      arguments: args,
+      arguments: ["-u"].concat(args),
       stdout: "pipe",
       stderr: "pipe"
     });
+
+    // 流式读 stdout：每行回调 onLine，用于实时刷新进度窗口
+    var decoder = new TextDecoder();
+    var buf = "";
+    if (onLine) {
+      try {
+        while (true) {
+          var chunk = await proc.stdout.read(4096);
+          if (!chunk || chunk.length === 0) break;
+          buf += decoder.decode(chunk, { stream: true });
+          var lines = buf.split(/\r?\n/);
+          buf = lines.pop();
+          for (var li = 0; li < lines.length; li++) {
+            var t = lines[li].trim();
+            if (t) onLine(t);
+          }
+        }
+      } catch (e) {
+        Zotero.debug("[Trae Lit Interp] stdout stream read failed: " + e);
+      }
+    }
+
     // exitCode 只是普通属性（初始 null），真正的退出码要等 wait() 返回
     var result = await proc.wait();
     // 读取 stderr，失败时用于展示具体错误原因（如 API error / 缺参数）
@@ -568,11 +813,19 @@ var TraeLitInterp = {
   },
 
   _showProgress: function (win, message) {
-    var progressWin = new Zotero.ProgressWindow({ closeOnClick: false });
-    progressWin.changeHeadline("Trae 文献解读");
-    progressWin.addDescription(message);
-    progressWin.show();
-    return progressWin;
+    var pw = new Zotero.ProgressWindow({ closeOnClick: false });
+    pw.changeHeadline("LITIT");
+    pw.addDescription(message);
+    pw.show();
+    // 返回带 update 的包装对象，便于实时刷新阶段文本（changeHeadline 为替换式，可靠）
+    return {
+      update: function (text) {
+        try { pw.changeHeadline(text); } catch (e) {}
+      },
+      close: function () {
+        try { pw.close(); } catch (e) {}
+      }
+    };
   },
 
   _notify: function (win, message, type) {

@@ -246,10 +246,141 @@ def _find_table_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
 
 
 # ============================================================
-# 3. LLM Prompt Building
+# 3. Paper Type Classification (adaptive template)
 # ============================================================
 
-def build_prompt(full_text, figure_info, max_text_len=12000):
+# 各研究类型对应的专用方法学评价框架
+# label 用于 Hero 徽章与元数据表；framework 注入 prompt 第 6 板块
+PAPER_TYPE_PROFILES = {
+    "meta": {
+        "label": "系统综述 / Meta分析",
+        "framework_name": "AMSTAR-2 + PRISMA",
+        "framework": (
+            "- 方案预注册：是否预先注册综述方案（PROSPERO 等），有无偏离\n"
+            "- 检索策略：数据库覆盖是否全面、检索式是否可复现、是否纳入灰色文献\n"
+            "- 纳排标准与筛选流程：标准是否明确、筛选是否双人独立进行\n"
+            "- 纳入研究的偏倚风险评估：是否逐篇评估（如 RoB 2 / NOS），结果是否用于敏感性分析\n"
+            "- 统计合并方法：效应量选择、固定/随机效应模型选择是否合理，I² 与 Q 检验的异质性评估\n"
+            "- 发表偏倚：漏斗图 / Egger 检验是否报告\n"
+            "- 敏感性分析与亚组分析、证据质量分级（GRADE）"
+        ),
+    },
+    "rct": {
+        "label": "随机对照试验 (RCT)",
+        "framework_name": "RoB 2",
+        "framework": (
+            "- 域1 随机化过程：随机序列生成、分配隐藏、基线是否均衡（Low / Some concerns / High）\n"
+            "- 域2 偏离预期干预：受试者与实施者盲法、依从性、干预偏离的处理（ITT / per-protocol）\n"
+            "- 域3 结局数据缺失：失访比例、缺失数据处理方式（如多重插补）\n"
+            "- 域4 结局测量：结局评估者盲法、结局指标客观性\n"
+            "- 域5 选择性报告：是否预注册、实际报告与方案是否一致"
+        ),
+    },
+    "cohort": {
+        "label": "队列研究",
+        "framework_name": "Newcastle-Ottawa Scale (NOS)",
+        "framework": (
+            "- 选择：暴露队列代表性、非暴露队列来源、暴露确定方法、研究开始时结局未发生\n"
+            "- 可比性：是否控制关键混杂因素（匹配/多因素调整）\n"
+            "- 结局：结局评估方式、随访时间是否充分、失访控制"
+        ),
+    },
+    "case_control": {
+        "label": "病例对照研究",
+        "framework_name": "Newcastle-Ottawa Scale (NOS)",
+        "framework": (
+            "- 选择：病例定义、病例代表性、对照来源、对照定义\n"
+            "- 可比性：是否控制关键混杂因素\n"
+            "- 暴露：暴露确定方法、病例与对照采用相同调查方式、无应答率"
+        ),
+    },
+    "cross_sectional": {
+        "label": "横断面研究",
+        "framework_name": "JBI 横断面研究评价工具",
+        "framework": (
+            "- 抽样框与抽样方法是否恰当、样本量是否充足\n"
+            "- 研究对象与情境描述是否清晰、纳入标准是否一致\n"
+            "- 暴露与结局测量的信效度、客观可靠的结局测量标准\n"
+            "- 混杂因素的识别与处理、统计方法恰当性、应答率"
+        ),
+    },
+    "case_report": {
+        "label": "病例报告 / 病例系列",
+        "framework_name": "CARE Checklist",
+        "framework": (
+            "- 患者信息：人口学、主诉、现病史与既往史是否完整、时间线是否清晰\n"
+            "- 临床发现与诊断评估：体格检查、辅助检查、诊断挑战与鉴别诊断\n"
+            "- 干预措施：类型、剂量、疗程及调整是否详尽，伦理/知情同意声明\n"
+            "- 随访与结局：临床结局、不良事件、患者视角的结局\n"
+            "- 讨论：与既往文献对比、本病例的独特价值与局限、结论的合理性"
+        ),
+    },
+    "basic": {
+        "label": "基础研究（体内外实验）",
+        "framework_name": "SYRCLE / 实验严谨性清单",
+        "framework": (
+            "- 动物实验（如适用）：随机分组、分配隐藏、实施者盲法、结局评估者盲法、\n"
+            "  结局评估时的动物随机选取、不完整数据处理、选择性报告\n"
+            "- 细胞/分子实验（如适用）：细胞系鉴定（STR）与支原体检测、抗体/试剂验证、\n"
+            "  生物学重复数、阳性与阴性对照设置\n"
+            "- 统计：样本量依据、多重比较校正、图像数据的量化与呈现规范"
+        ),
+    },
+}
+
+# 分类关键词（小写匹配）。head 区（标题+摘要）权重 3，全文权重 1
+_TYPE_PATTERNS = {
+    "meta": [r"meta-analysis", r"meta analysis", r"systematic review", r"prisma", r"pooled analysis"],
+    "rct": [r"randomized controlled", r"randomised controlled", r"randomization",
+            r"randomisation", r"randomly assigned", r"randomly allocated",
+            r"placebo-controlled", r"double-blind"],
+    "case_report": [r"case report", r"case series", r"we report a case",
+                    r"we present a case", r"a rare case of"],
+    "cohort": [r"cohort study", r"prospective cohort", r"retrospective cohort",
+               r"cohort analysis", r"population-based cohort"],
+    "case_control": [r"case-control", r"case control study", r"nested case-control"],
+    "cross_sectional": [r"cross-sectional", r"cross sectional study"],
+    "basic": [r"in vitro", r"in vivo", r"cell line", r"western blot",
+              r"immunohistochemistry", r"knockout", r"mouse model", r"murine model",
+              r"signaling pathway", r"single-cell rna"],
+}
+
+# 优先级（得分相同时靠前者优先）
+_TYPE_PRIORITY = ["meta", "rct", "case_report", "cohort", "case_control",
+                  "cross_sectional", "basic"]
+
+
+def classify_paper_type(full_text):
+    """启发式论文类型分类：关键词加权评分。
+
+    返回 PAPER_TYPE_PROFILES 中对应的 profile dict；无法识别时返回 None
+    （此时解读沿用通用 10 维度方法学评价）。
+    """
+    head = full_text[:6000].lower()
+    whole = full_text.lower()
+    scores = {}
+    for t, patterns in _TYPE_PATTERNS.items():
+        score = 0
+        for p in patterns:
+            score += 3 * len(re.findall(p, head)) + len(re.findall(p, whole))
+        scores[t] = score
+
+    best_type = None
+    best_score = 0
+    for t in _TYPE_PRIORITY:
+        if scores.get(t, 0) > best_score:
+            best_type, best_score = t, scores[t]
+
+    if best_type and best_score >= 3:
+        return PAPER_TYPE_PROFILES[best_type]
+    return None
+
+
+# ============================================================
+# 3.1 LLM Prompt Building
+# ============================================================
+
+def build_prompt(full_text, figure_info, max_text_len=12000, paper_type=None):
     """Build the 10-section interpretation prompt."""
     text_preview = full_text[:max_text_len]
     if len(full_text) > max_text_len:
@@ -260,8 +391,24 @@ def build_prompt(full_text, figure_info, max_text_len=12000):
         for f in figure_info
     ]) if figure_info else "（未检测到明确图表）"
 
-    prompt = f"""你是一位医学文献解读专家。请按照以下10个板块对这篇论文进行系统性解读。
+    # 第 6 板块：识别出研究类型时用对应的专用评价框架，否则用通用 10 维度
+    if paper_type:
+        type_note = (f"\n> 论文类型识别：{paper_type['label']}。"
+                     f"方法学评价请采用 {paper_type['framework_name']} 框架。\n")
+        sec6 = f"""## 6. 方法学评价
+本论文已识别为「{paper_type['label']}」。请采用 **{paper_type['framework_name']}** 框架，逐项评价以下维度，每项给出优势/不足/中立判断并附理由，结尾给出整体评级（A/B/C）：
+{paper_type['framework']}
 
+另请补充以下通用维度：样本量与统计功效、统计方法恰当性、外部效度/泛化性、报告完整性。"""
+    else:
+        type_note = ""
+        sec6 = """## 6. 方法学评价
+从以下10个维度系统评价，每项给出优势/不足/中立判断并附理由，结尾给出整体评级（A/B/C）：
+研究设计合理性、对照组设置、样本量与统计功效、随机化与盲法、模型/人群代表性、
+测量方法可靠性、混杂因素控制、统计方法恰当性、外部效度/泛化性、报告完整性"""
+
+    prompt = f"""你是一位医学文献解读专家。请按照以下10个板块对这篇论文进行系统性解读。
+{type_note}
 ## 输出格式要求
 - 每个板块用 `## N. 标题` 开头（N为1-10的数字）
 - 中文为主，专业术语保留英文原文
@@ -289,10 +436,7 @@ def build_prompt(full_text, figure_info, max_text_len=12000):
 ## 5. 讨论要点
 核心结论、与既往研究对比、机制解释
 
-## 6. 方法学评价
-从以下10个维度系统评价，每项给出优势/不足/中立判断并附理由，结尾给出整体评级（A/B/C）：
-研究设计合理性、对照组设置、样本量与统计功效、随机化与盲法、模型/人群代表性、
-测量方法可靠性、混杂因素控制、统计方法恰当性、外部效度/泛化性、报告完整性
+{sec6}
 
 ## 7. 写作提炼
 Introduction 叙事结构与段落逻辑功能、Discussion 组织策略、可复用写作模板（附原文例句佐证）
@@ -327,33 +471,102 @@ Introduction 叙事结构与段落逻辑功能、Discussion 组织策略、可�
 
 
 # ============================================================
-# 4. DeepSeek API Call
+# 3.2 Multi-Paper Comparison Prompt
 # ============================================================
 
-def call_llm_api(prompt, api_key, api_base, model, max_tokens=8000):
-    """Call DeepSeek (OpenAI-compatible) API."""
-    url = api_base.rstrip("/") + "/chat/completions"
-    
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "你是一位专业的医学文献解读专家，擅长系统性分析和评价学术论文。"},
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.3,
-        "stream": False
-    }
+COMPARE_SECTION_TITLES = [
+    "对比总览",
+    "研究设计对比",
+    "核心结果对比",
+    "方法学质量对比",
+    "一致性与矛盾点",
+    "综合结论"
+]
 
+
+def build_compare_prompt(papers, max_text_len=8000):
+    """构建多篇论文对比分析的 prompt。
+
+    papers: list of dict，每项含 title/authors/journal/doi/text（全文）。
+    """
+    paper_blocks = ""
+    for i, p in enumerate(papers, 1):
+        text_preview = p["text"][:max_text_len]
+        if len(p["text"]) > max_text_len:
+            text_preview += "\n\n[... 文本已截断 ...]"
+        paper_blocks += f"""
+### 论文{i}：{p['title'] or '未命名'}
+- 作者：{p.get('authors') or '未知'}
+- 期刊：{p.get('journal') or '未知'}
+- DOI：{p.get('doi') or '无'}
+
+{text_preview}
+"""
+
+    n = len(papers)
+    prompt = f"""你是一位医学文献解读专家。以下是 {n} 篇同主题论文，请进行系统性对比分析。
+
+## 输出格式要求
+- 每个板块用 `## N. 标题` 开头（N为1-6的数字）
+- 中文为主，专业术语保留英文原文
+- 对比内容优先用 Markdown 表格（首列为对比维度，后续各列对应论文1/论文2/...）
+- 全篇杜绝营销式语言，直接陈述
+- 引用具体论文时用「论文1」「论文2」等编号指代
+
+## 6个板块结构
+
+## 1. 对比总览
+用一张表格列出每篇论文的：标题、研究类型、研究对象/模型、样本量、核心结论（一句话）。
+随后用 2-3 句话概括这组论文共同关注的科学问题。
+
+## 2. 研究设计对比
+表格对比：研究设计类型、研究对象/人群、干预或暴露、对照设置、主要结局指标、随访/时间点。
+表格后用简短文字点评设计层面的关键差异及其对结论的影响。
+
+## 3. 核心结果对比
+表格对比各论文的主要发现（效应量/关键数据），指出结果方向是否一致、量级差异。
+
+## 4. 方法学质量对比
+逐篇给出方法学质量评级（A 严格 / B 基本可靠但有局限 / C 存在明显缺陷），
+并用表格列出各论文在样本量、对照设置、盲法/偏倚控制、统计方法上的主要优缺点。
+
+## 5. 一致性与矛盾点
+- 各论文结论相互支持之处
+- 相互矛盾或结果不一致之处，并分析可能原因（人群差异、设计差异、统计方法、发表偏倚等）
+
+## 6. 综合结论
+基于这组论文的整体证据：当前证据强度判断、对临床/科研实践的启示、证据缺口与后续研究方向。
+最后用一行 `> 综合判断：...` 给出对这组论文整体证据价值的一句话结论。
+{paper_blocks}
+请按以上结构输出完整对比分析。"""
+
+    return prompt
+
+
+# ============================================================
+# 4. LLM API Call (multi-provider)
+# ============================================================
+
+SYSTEM_PROMPT = "你是一位专业的医学文献解读专家，擅长系统性分析和评价学术论文。"
+
+# 各 provider 默认 base / model（设置面板切换 provider 时自动填充）
+PROVIDER_DEFAULTS = {
+    "deepseek": {"base": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
+    "openai":   {"base": "https://api.openai.com/v1", "model": "gpt-4o"},
+    "claude":   {"base": "https://api.anthropic.com", "model": "claude-sonnet-4-5"},
+    "ollama":   {"base": "http://localhost:11434/v1", "model": "llama3"},
+}
+
+
+def _post_json(url, payload, headers):
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
-    req.add_header("Authorization", "Bearer " + api_key)
-
+    for k, v in headers.items():
+        req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            return result["choices"][0]["message"]["content"]
+            return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8") if e.fp else ""
         print(f"API Error {e.code}: {error_body}", file=sys.stderr)
@@ -361,6 +574,47 @@ def call_llm_api(prompt, api_key, api_base, model, max_tokens=8000):
     except Exception as e:
         print(f"API call failed: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def call_llm_api(prompt, api_key, api_base, model, provider="deepseek", max_tokens=8000):
+    """统一 LLM 调用层：deepseek/openai/ollama 走 OpenAI 兼容格式，claude 走 Anthropic Messages 格式。"""
+    provider = (provider or "deepseek").lower()
+
+    if provider == "claude":
+        url = api_base.rstrip("/") + "/v1/messages"
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        }
+        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+        result = _post_json(url, payload, headers)
+        try:
+            return "".join(
+                b.get("text", "") for b in result.get("content", [])
+                if b.get("type") == "text"
+            )
+        except Exception as e:
+            print(f"Parse Claude response failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # deepseek / openai / ollama 均为 OpenAI 兼容格式
+    url = api_base.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.3,
+        "stream": False
+    }
+    headers = {"Authorization": "Bearer " + api_key}
+    result = _post_json(url, payload, headers)
+    return result["choices"][0]["message"]["content"]
 
 
 # ============================================================
@@ -617,10 +871,51 @@ def _build_meta_table(paper_title, meta):
         rows.append(f'<tr><td><strong>期刊</strong></td><td>{meta["journal"]}</td></tr>')
     if meta.get("doi"):
         rows.append(f'<tr><td><strong>DOI</strong></td><td><code>{meta["doi"]}</code></td></tr>')
+    if meta.get("paper_type"):
+        rows.append(f'<tr><td><strong>研究类型</strong></td><td>{meta["paper_type"]}</td></tr>')
     if not rows:
         return ""
     return ('<table class="data-table"><tr><th style="width:140px">项目</th><th>内容</th></tr>'
             + "".join(rows) + '</table>')
+
+
+def _md_to_html(content):
+    """把 LLM 输出的 markdown 文本转换为 HTML 片段（转义 + 表格/列表/引用/标题等）。"""
+    # HTML 转义 LLM 原始内容（先 & 后 <），防止 p<0.05 / A & B 等文本破坏 HTML 结构
+    content = content.replace("&", "&amp;").replace("<", "&lt;")
+
+    # Convert markdown tables to HTML
+    content = _convert_markdown_tables(content)
+
+    # Convert markdown bold to HTML
+    content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
+
+    # Convert markdown italic to HTML（单星号，在粗体之后处理）
+    content = re.sub(r'\*([^*\n]+)\*', r'<em>\1</em>', content)
+
+    # 过滤孤立的 # 标记行（LLM 输出的空标题，如 "###"）
+    content = re.sub(r'^#{1,6}[ \t]*$', '', content, flags=re.MULTILINE)
+
+    # Convert markdown headers
+    content = re.sub(r'^#### (.+)$', r'<h4>\1</h4>', content, flags=re.MULTILINE)
+    content = re.sub(r'^### (.+)$', r'<h3>\1</h3>', content, flags=re.MULTILINE)
+
+    # Convert markdown lists
+    content = re.sub(r'^- (.+)$', r'<li>\1</li>', content, flags=re.MULTILINE)
+    content = re.sub(r'(<li>.*?</li>\n?)+', lambda m: f'<ul>{m.group(0)}</ul>', content, flags=re.MULTILINE)
+
+    # Convert markdown blockquote to callout（> 标题：内容 或 > 内容）
+    content = re.sub(r'^>\s*\*\*(.+?)\*\*\s*[:：]\s*(.+)$',
+                     r'<div class="callout callout-info"><div class="callout-title">\1</div>\2</div>',
+                     content, flags=re.MULTILINE)
+    content = re.sub(r'^>\s*(.+)$',
+                     r'<div class="callout callout-info">\1</div>',
+                     content, flags=re.MULTILINE)
+
+    # Convert paragraphs（先过滤掉 LLM 用来分隔板块的 --- 水平线）
+    content = re.sub(r'^-{3,}[ \t]*$', '', content, flags=re.MULTILINE)
+    content = re.sub(r'^([^<\n].+)$', r'<p>\1</p>', content, flags=re.MULTILINE)
+    return content
 
 
 def generate_html(sections, figures, paper_title="文献解读", meta=None):
@@ -645,9 +940,6 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
         title = sections.get(i, {}).get("title", SECTION_TITLES[i-1])
         content = sections.get(i, {}).get("content", "（待补充）")
 
-        # HTML 转义 LLM 原始内容（先 & 后 <），防止 p<0.05 / A & B 等文本破坏 HTML 结构
-        content = content.replace("&", "&amp;").replace("<", "&lt;")
-
         # sec1 论文基本信息：用 meta 构建结构化表格（参考文件风格）
         if i == 1:
             meta_table = _build_meta_table(paper_title, meta)
@@ -663,38 +955,10 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
             flow = _build_logic_flow(content)
             if flow:
                 content = flow
-
-        # Convert markdown tables to HTML
-        content = _convert_markdown_tables(content)
-
-        # Convert markdown bold to HTML
-        content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
-
-        # Convert markdown italic to HTML（单星号，在粗体之后处理）
-        content = re.sub(r'\*([^*\n]+)\*', r'<em>\1</em>', content)
-
-        # 过滤孤立的 # 标记行（LLM 输出的空标题，如 "###"）
-        content = re.sub(r'^#{1,6}[ \t]*$', '', content, flags=re.MULTILINE)
-
-        # Convert markdown headers
-        content = re.sub(r'^#### (.+)$', r'<h4>\1</h4>', content, flags=re.MULTILINE)
-        content = re.sub(r'^### (.+)$', r'<h3>\1</h3>', content, flags=re.MULTILINE)
-
-        # Convert markdown lists
-        content = re.sub(r'^- (.+)$', r'<li>\1</li>', content, flags=re.MULTILINE)
-        content = re.sub(r'(<li>.*?</li>\n?)+', lambda m: f'<ul>{m.group(0)}</ul>', content, flags=re.MULTILINE)
-
-        # Convert markdown blockquote to callout（> 标题：内容 或 > 内容）
-        content = re.sub(r'^>\s*\*\*(.+?)\*\*\s*[:：]\s*(.+)$',
-                         r'<div class="callout callout-info"><div class="callout-title">\1</div>\2</div>',
-                         content, flags=re.MULTILINE)
-        content = re.sub(r'^>\s*(.+)$',
-                         r'<div class="callout callout-info">\1</div>',
-                         content, flags=re.MULTILINE)
-
-        # Convert paragraphs（先过滤掉 LLM 用来分隔板块的 --- 水平线）
-        content = re.sub(r'^-{3,}[ \t]*$', '', content, flags=re.MULTILINE)
-        content = re.sub(r'^([^<\n].+)$', r'<p>\1</p>', content, flags=re.MULTILINE)
+            else:
+                content = _md_to_html(content)
+        else:
+            content = _md_to_html(content)
 
         open_attr = " open" if i == 1 else ""
         accordion += f'''
@@ -724,6 +988,10 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
 
     figures_section = ""
 
+    # 论文类型徽章（识别成功时显示在 Hero 区）
+    type_badge = (f'  <span class="hero-badge" style="background:rgba(255,255,255,0.28)">{meta["paper_type"]}</span>'
+                  if meta.get("paper_type") else "")
+
     html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -736,7 +1004,7 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
 <div class="container">
 
 <div class="hero">
-  <span class="hero-badge">文献解读 · Literature Interpretation</span>
+  <span class="hero-badge">文献解读 · Literature Interpretation</span>{type_badge}
   <h1>{paper_title}</h1>
   {hero_meta}
   {hero_doi}
@@ -757,6 +1025,95 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
 
 <footer>
   <p>文献解读 · 按照「文献解读」标准执行 · 生成于 {date_str}</p>
+</footer>
+
+</div>
+</body>
+</html>'''
+
+    return html
+
+
+def generate_compare_html(sections, papers, report_title="多篇文献对比分析"):
+    """生成多篇论文对比报告的自包含 HTML（6 板块折叠布局）。
+
+    sections: parse_sections 解析出的 {1..6: {title, content}}
+    papers: 参与对比的论文元数据列表（用于 Hero 区展示）
+    """
+    from datetime import datetime
+    date_str = datetime.now().strftime("%Y-%m-%d")
+
+    # TOC
+    toc_links = ""
+    for i in range(1, 7):
+        title = sections.get(i, {}).get("title", COMPARE_SECTION_TITLES[i-1])
+        num = f"{i:02d}"
+        toc_links += (f'<li><a href="#sec{i}" onclick="var el=document.getElementById(\'sec{i}\');'
+                      f'if(el){{el.open=true;}}return false;"><span>{num}</span><span>{title}</span></a></li>\n')
+
+    # Accordion sections
+    accordion = ""
+    for i in range(1, 7):
+        title = sections.get(i, {}).get("title", COMPARE_SECTION_TITLES[i-1])
+        content = sections.get(i, {}).get("content", "（待补充）")
+
+        # 第 1 板块顶部附上参与对比的论文清单表
+        if i == 1:
+            rows = ""
+            for idx, p in enumerate(papers, 1):
+                t = (p.get("title") or "未命名").replace("&", "&amp;").replace("<", "&lt;")
+                a = (p.get("authors") or "").replace("&", "&amp;").replace("<", "&lt;")
+                j = (p.get("journal") or "").replace("&", "&amp;").replace("<", "&lt;")
+                d = (p.get("doi") or "").replace("&", "&amp;").replace("<", "&lt;")
+                rows += f'<tr><td>论文{idx}</td><td>{t}</td><td>{a}</td><td>{j}</td><td><code>{d}</code></td></tr>'
+            if rows:
+                content = ('<table class="data-table"><tr><th style="width:60px">编号</th><th>标题</th>'
+                           '<th>作者</th><th>期刊</th><th>DOI</th></tr>' + rows + '</table>\n' + content)
+
+        content = _md_to_html(content)
+
+        open_attr = " open" if i == 1 else ""
+        accordion += f'''
+<details class="accordion-item" id="sec{i}"{open_attr}>
+<summary class="accordion-header"><span class="accordion-num">{i}</span><span class="accordion-title">{title}</span><svg class="accordion-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg></summary>
+  <div class="accordion-content">
+{content}
+  </div>
+</details>'''
+
+    safe_title = report_title.replace("&", "&amp;").replace("<", "&lt;")
+    html = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多篇对比 - {safe_title}</title>
+<style>{CSS}</style>
+</head>
+<body>
+<div class="container">
+
+<div class="hero">
+  <span class="hero-badge">多篇对比 · Comparative Analysis</span>
+  <h1>{safe_title}</h1>
+  <div class="hero-meta"><strong>对比论文数：</strong>{len(papers)} 篇</div>
+  <div class="hero-summary"><strong>生成日期：</strong>{date_str}　|　<strong>分析框架：</strong>6板块多篇对比</div>
+</div>
+
+<div class="toc">
+  <div class="toc-title">目录 / Table of Contents</div>
+  <ul class="toc-list">
+{toc_links}  </ul>
+  <div class="toc-controls">
+    <a class="toc-btn" href="javascript:void(0)" onclick="var d=document.querySelectorAll('details.accordion-item');for(var i=0;i<d.length;i++){{d[i].open=true;}}return false;">全部展开</a>
+    <a class="toc-btn" href="javascript:void(0)" onclick="var d=document.querySelectorAll('details.accordion-item');for(var i=0;i<d.length;i++){{d[i].open=false;}}return false;">全部折叠</a>
+  </div>
+</div>
+
+{accordion}
+
+<footer>
+  <p>多篇文献对比分析 · 生成于 {date_str}</p>
 </footer>
 
 </div>
@@ -908,12 +1265,15 @@ def main():
     parser = argparse.ArgumentParser(description="LITIT Engine")
     parser.add_argument("--pdf", help="Path to PDF file")
     parser.add_argument("--output", required=True, help="Output HTML path")
-    parser.add_argument("--mode", choices=["auto", "manual", "build-final"], default="manual")
+    parser.add_argument("--mode", choices=["auto", "manual", "build-final", "compare"], default="manual")
     parser.add_argument("--api-key", default="")
     parser.add_argument("--api-base", default="https://api.deepseek.com/v1")
     parser.add_argument("--model", default="deepseek-chat")
+    parser.add_argument("--provider", default="deepseek")
     parser.add_argument("--prompt-file", default="prompt.txt")
     parser.add_argument("--response", help="LLM response file (for build-final mode)")
+    # 多篇对比模式：JSON 文件，内容为 [{pdf, title, authors, journal, doi}, ...]
+    parser.add_argument("--papers-json", help="Papers list JSON for compare mode")
     # 论文元数据（由 Zotero 条目传入，用于 Hero 展示与文件命名）
     parser.add_argument("--title", default="")
     parser.add_argument("--authors", default="")
@@ -943,7 +1303,58 @@ def main():
 
         build_final_html(args.response, figures, args.output, paper_title, meta)
         return
-    
+
+    if args.mode == "compare":
+        # Compare mode: 多篇论文对比分析
+        if not args.papers_json:
+            print("ERROR: --papers-json required for compare mode", file=sys.stderr)
+            sys.exit(1)
+        if not args.api_key:
+            print("ERROR: --api-key required for compare mode", file=sys.stderr)
+            sys.exit(1)
+
+        with open(args.papers_json, "r", encoding="utf-8") as f:
+            paper_list = json.load(f)
+        if len(paper_list) < 2:
+            print("ERROR: compare mode needs at least 2 papers", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"\n--- Compare Mode ({len(paper_list)} papers) ---")
+        papers = []
+        for idx, p in enumerate(paper_list, 1):
+            print(f"Extracting text [{idx}/{len(paper_list)}]: {p.get('title') or p['pdf']}")
+            text, _ = extract_text(p["pdf"])
+            papers.append({
+                "title": p.get("title", ""),
+                "authors": p.get("authors", ""),
+                "journal": p.get("journal", ""),
+                "doi": p.get("doi", ""),
+                "text": text,
+            })
+
+        print("Building compare prompt...")
+        prompt = build_compare_prompt(papers)
+
+        print(f"Calling {args.provider} API ({args.model})...")
+        response = call_llm_api(prompt, args.api_key, args.api_base, args.model,
+                                provider=args.provider, max_tokens=8000)
+        print(f"  Response: {len(response)} chars")
+
+        print("Parsing sections...")
+        sections = parse_sections(response)
+        print(f"  Parsed {len(sections)} sections")
+
+        print("Generating HTML...")
+        html = generate_compare_html(sections, papers, paper_title)
+
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        file_size = os.path.getsize(args.output)
+        print(f"\nDone! Compare report written to: {args.output}")
+        print(f"  File size: {file_size / 1024:.0f} KB")
+        return
+
     # For auto and manual modes, we need a PDF
     if not args.pdf:
         print("ERROR: --pdf required", file=sys.stderr)
@@ -973,11 +1384,21 @@ def main():
             sys.exit(1)
         
         print("\n--- Auto Mode ---")
+        # 论文类型自适应：先启发式分类，再选择对应的方法学评价框架
+        paper_type = classify_paper_type(full_text)
+        if paper_type:
+            print(f"Paper type detected: {paper_type['label']} "
+                  f"(framework: {paper_type['framework_name']})")
+            meta["paper_type"] = paper_type["label"]
+        else:
+            print("Paper type: not detected, using generic evaluation framework")
+
         print("Building prompt...")
-        prompt = build_prompt(full_text, figures)
+        prompt = build_prompt(full_text, figures, paper_type=paper_type)
         
-        print(f"Calling DeepSeek API ({args.model})...")
-        response = call_llm_api(prompt, args.api_key, args.api_base, args.model)
+        print(f"Calling {args.provider} API ({args.model})...")
+        response = call_llm_api(prompt, args.api_key, args.api_base, args.model,
+                                provider=args.provider)
         print(f"  Response: {len(response)} chars")
         
         print("Parsing sections...")

@@ -20,6 +20,26 @@ var TraeLitInterpPrefs = {
         TraeLitInterpPrefs._resetUpdate();
       });
     }
+    // 切换服务商时自动填充该服务商的默认 base / model
+    var prov = doc.getElementById("trae-lit-interp-provider");
+    if (prov) {
+      prov.addEventListener("change", function () {
+        TraeLitInterpPrefs._onProviderChange(prov.value);
+      });
+    }
+  },
+
+  _onProviderChange: function (provider) {
+    var defs = {
+      deepseek: { base: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+      openai:   { base: "https://api.openai.com/v1", model: "gpt-4o" },
+      claude:   { base: "https://api.anthropic.com", model: "claude-sonnet-4-5" },
+      ollama:   { base: "http://localhost:11434/v1", model: "llama3" }
+    };
+    var d = defs[provider];
+    if (!d) return;
+    this._setInput("trae-lit-interp-apiBase", d.base);
+    this._setInput("trae-lit-interp-model", d.model);
   },
 
   // 选择 python.exe 并写回输入框（派发 change 事件触发绑定层保存到 pref）

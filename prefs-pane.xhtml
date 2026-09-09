@@ -1,6 +1,16 @@
 <vbox id="trae-lit-interp-prefpane" onload="TraeLitInterpPrefs.init()">
 	<groupbox>
-		<label><html:h2>DeepSeek API 设置</html:h2></label>
+		<label><html:h2>LLM API 设置</html:h2></label>
+		<hbox align="center" style="margin-bottom:6px">
+			<label value="服务商" style="width:130px"/>
+			<html:select id="trae-lit-interp-provider"
+				preference="extensions.trae-lit-interp.provider" style="flex:1">
+				<html:option value="deepseek">DeepSeek</html:option>
+				<html:option value="openai">OpenAI</html:option>
+				<html:option value="claude">Claude (Anthropic)</html:option>
+				<html:option value="ollama">本地 Ollama</html:option>
+			</html:select>
+		</hbox>
 		<hbox align="center" style="margin-bottom:6px">
 			<label value="API Key" style="width:130px"/>
 			<html:input id="trae-lit-interp-apiKey" type="text"
@@ -16,6 +26,15 @@
 			<label value="模型名称" style="width:130px"/>
 			<html:input id="trae-lit-interp-model" type="text"
 				preference="extensions.trae-lit-interp.model" style="flex:1"/>
+		</hbox>
+	</groupbox>
+	<groupbox>
+		<label><html:h2>生成设置</html:h2></label>
+		<hbox align="center">
+			<label value="解读完成标签" style="width:130px"/>
+			<html:input id="trae-lit-interp-doneTag" type="text"
+				preference="extensions.trae-lit-interp.doneTag"
+				placeholder="已解读（留空则不打标签）" style="flex:1"/>
 		</hbox>
 	</groupbox>
 	<groupbox>
