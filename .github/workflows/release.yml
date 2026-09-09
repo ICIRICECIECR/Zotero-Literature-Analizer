@@ -70,6 +70,8 @@ jobs:
             manifest.json \
             bootstrap.js \
             prefs.js \
+            prefs-pane.xhtml \
+            prefs-pane.js \
             update.json \
             icons/ \
             scripts/ \

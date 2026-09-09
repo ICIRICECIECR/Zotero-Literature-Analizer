@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.3",
+  _version: "1.0.5",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -34,6 +34,20 @@ var TraeLitInterp = {
     }.bind(this)).catch(function (e) {
       Zotero.debug("[Trae Lit Interp] Failed to copy update manifest: " + e);
     });
+
+    // 注册设置面板到 Zotero 设置页侧边栏（Zotero 7+ 官方 API，
+    // 插件 shutdown 时由 Zotero 自动注销，无需手动 unregister
+    if (Zotero.PreferencePanes && Zotero.PreferencePanes.register) {
+      Zotero.PreferencePanes.register({
+        pluginID: this._pluginID,
+        src: "prefs-pane.xhtml",
+        scripts: ["prefs-pane.js"],
+        id: "trae-lit-interp-prefpane",
+        label: "文献解读"
+      }).catch(function (e) {
+        Zotero.debug("[Trae Lit Interp] Failed to register pref pane: " + e);
+      });
+    }
   },
 
   _setDefaults: function () {
@@ -394,40 +408,11 @@ var TraeLitInterp = {
   /******************* Settings Dialog *******************/
 
   openSettings: function (win) {
-    var apiKey = Zotero.Prefs.get("extensions.trae-lit-interp.apiKey", true) || "";
-    var pythonPath = Zotero.Prefs.get("extensions.trae-lit-interp.pythonPath", true) || "python";
-    var apiBase = Zotero.Prefs.get("extensions.trae-lit-interp.apiBase", true) || "https://api.deepseek.com/v1";
-    var model = Zotero.Prefs.get("extensions.trae-lit-interp.model", true) || "deepseek-chat";
-    var updateSource = Zotero.Prefs.get("extensions.trae-lit-interp.updateSource", true) || "";
-
-    // Zotero 10 已移除旧 XPCOM prompt-service，改用窗口原生 prompt（正常插件通用写法）
-    var input = win.prompt("DeepSeek API Key（留空则使用手动模式）:", apiKey);
-    if (input !== null) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.apiKey", input, true);
-    }
-
-    var pyInput = win.prompt("Python 路径（如 python, C:\\Python311\\python.exe）:", pythonPath);
-    if (pyInput !== null) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.pythonPath", pyInput, true);
-    }
-
-    var modelInput = win.prompt("模型名称（如 deepseek-chat）:", model);
-    if (modelInput !== null) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.model", modelInput, true);
-    }
-
-    var baseInput = win.prompt("API Base URL:", apiBase);
-    if (baseInput !== null) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.apiBase", baseInput, true);
-    }
-
-    var updateInput = win.prompt("本地 update.json 路径（留空使用默认位置）:", updateSource);
-    if (updateInput !== null) {
-      if (updateInput.trim() === "") {
-        var dataDir = Zotero.DataDirectory.dir;
-        updateInput = PathUtils.join(dataDir, "trae-lit-interp", "update.json");
-      }
-      Zotero.Prefs.set("extensions.trae-lit-interp.updateSource", updateInput, true);
+    // 直接跳转到 Zotero 设置页中本插件的设置面板（官方 API）
+    try {
+      Zotero.Utilities.openPreferences("trae-lit-interp-prefpane");
+    } catch (e) {
+      Zotero.debug("[Trae Lit Interp] openPreferences failed: " + e);
     }
   },
 

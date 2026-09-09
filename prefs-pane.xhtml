@@ -1,0 +1,37 @@
+<vbox id="trae-lit-interp-prefpane" onload="TraeLitInterpPrefs.init()">
+	<groupbox>
+		<label><html:h2>DeepSeek API 设置</html:h2></label>
+		<hbox align="center" style="margin-bottom:6px">
+			<label value="API Key" style="width:130px"/>
+			<html:input id="trae-lit-interp-apiKey" type="text"
+				preference="extensions.trae-lit-interp.apiKey"
+				placeholder="sk-...（留空则使用手动模式）" style="flex:1"/>
+		</hbox>
+		<hbox align="center" style="margin-bottom:6px">
+			<label value="API Base URL" style="width:130px"/>
+			<html:input id="trae-lit-interp-apiBase" type="text"
+				preference="extensions.trae-lit-interp.apiBase" style="flex:1"/>
+		</hbox>
+		<hbox align="center">
+			<label value="模型名称" style="width:130px"/>
+			<html:input id="trae-lit-interp-model" type="text"
+				preference="extensions.trae-lit-interp.model" style="flex:1"/>
+		</hbox>
+	</groupbox>
+	<groupbox>
+		<label><html:h2>运行环境</html:h2></label>
+		<hbox align="center" style="margin-bottom:6px">
+			<label value="Python 路径" style="width:130px"/>
+			<html:input id="trae-lit-interp-pythonPath" type="text"
+				preference="extensions.trae-lit-interp.pythonPath"
+				placeholder="python 或 C:\Python311\python.exe" style="flex:1"/>
+			<button id="trae-lit-interp-browsePython" label="选择文件..."/>
+		</hbox>
+		<hbox align="center">
+			<label value="update.json 路径" style="width:130px"/>
+			<html:input id="trae-lit-interp-updateSource" type="text"
+				preference="extensions.trae-lit-interp.updateSource" style="flex:1"/>
+			<button id="trae-lit-interp-resetUpdate" label="恢复默认"/>
+		</hbox>
+	</groupbox>
+</vbox>
