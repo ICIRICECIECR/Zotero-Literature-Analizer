@@ -256,8 +256,10 @@ def build_prompt(full_text, figure_info, max_text_len=12000):
 
 ## 10个板块结构
 
+格式要求：研究假设、关键结论、重要发现等，请用 `> 标题：内容` 的引用格式（独占一行）呈现，将渲染为高亮提示框；具体数据尽量用列表（- 开头）或 Markdown 表格呈现。
+
 ## 1. 论文基本信息
-标题、作者（第一作者+通讯作者）、期刊、年份、DOI、一句话概括核心发现
+一句话概括核心发现（标题/作者/期刊/DOI 已由系统自动填入，无需重复输出）
 
 ## 2. 研究背景与问题
 领域现状、既往研究空白、研究假设/目的
@@ -531,6 +533,12 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
         title = sections.get(i, {}).get("title", SECTION_TITLES[i-1])
         content = sections.get(i, {}).get("content", "（待补充）")
 
+        # sec1 论文基本信息：用 meta 构建结构化表格（参考文件风格）
+        if i == 1:
+            meta_table = _build_meta_table(paper_title, meta)
+            if meta_table:
+                content = meta_table + "\n" + content
+
         # Insert figures in section 4 (核心结果)
         if i == 4 and figures:
             content = _insert_figures_into_content(content, figures)
@@ -548,6 +556,14 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
         # Convert markdown lists
         content = re.sub(r'^- (.+)$', r'<li>\1</li>', content, flags=re.MULTILINE)
         content = re.sub(r'(<li>.*?</li>\n?)+', lambda m: f'<ul>{m.group(0)}</ul>', content, flags=re.MULTILINE)
+
+        # Convert markdown blockquote to callout（> 标题：内容 或 > 内容）
+        content = re.sub(r'^>\s*\*\*(.+?)\*\*\s*[:：]\s*(.+)$',
+                         r'<div class="callout callout-info"><div class="callout-title">\1</div>\2</div>',
+                         content, flags=re.MULTILINE)
+        content = re.sub(r'^>\s*(.+)$',
+                         r'<div class="callout callout-info">\1</div>',
+                         content, flags=re.MULTILINE)
 
         # Convert paragraphs
         content = re.sub(r'^([^<\n].+)$', r'<p>\1</p>', content, flags=re.MULTILINE)
