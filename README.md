@@ -1,4 +1,4 @@
-# Trae Literature Interpretation | Trae 文献解读
+# LITIT | 文献解读
 
 A Zotero plugin that generates structured literature interpretation HTML reports directly from PDF attachments, with figures/tables embedded as base64, 10-section accordion layout, and full Zotero note compatibility.
 

@@ -148,7 +148,7 @@ jobs:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: v${{ steps.meta.outputs.version }} — ${{ steps.meta.outputs.tag }}
           body: |
-            ## 📚 Trae Literature Interpretation v${{ steps.meta.outputs.version }}
+            ## 📚 LITIT v${{ steps.meta.outputs.version }}
 
             > Zotero 7+ 插件：一键生成 10 板块结构化文献解读 HTML 报告
 

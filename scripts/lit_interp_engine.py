@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Trae Literature Interpretation Engine
+LITIT Engine
 ======================================
 Extracts PDF content (text + figures/tables), calls DeepSeek LLM API
 (or generates prompt for manual mode), and produces a self-contained
@@ -793,7 +793,7 @@ def build_final_html(response_path, figures, output_path, paper_title="文献解
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Trae Literature Interpretation Engine")
+    parser = argparse.ArgumentParser(description="LITIT Engine")
     parser.add_argument("--pdf", help="Path to PDF file")
     parser.add_argument("--output", required=True, help="Output HTML path")
     parser.add_argument("--mode", choices=["auto", "manual", "build-final"], default="manual")

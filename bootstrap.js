@@ -1,5 +1,5 @@
 /*
- * Trae Literature Interpretation Plugin for Zotero 7+
+ * LITIT Plugin for Zotero 7+
  * bootstrap.js - Plugin lifecycle, menu integration, and main logic
  */
 
@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.18",
+  _version: "1.0.19",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {

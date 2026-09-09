@@ -1,5 +1,5 @@
 /*
- * Trae Literature Interpretation - 设置面板脚本
+ * LITIT - 设置面板脚本
  * 随 prefs-pane.xhtml 一起加载到 Zotero 设置窗口。
  * preference 属性的读写由 Zotero 设置页绑定层自动处理，
  * 这里只负责两个按钮的交互。
