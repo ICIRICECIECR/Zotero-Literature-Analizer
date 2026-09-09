@@ -354,19 +354,20 @@ var TraeLitInterp = {
       return;
     }
 
-    var fp = Components.classes["@mozilla.org/filepicker;1"]
-      .createInstance(Components.interfaces.nsIFilePicker);
-    fp.init(win, "选择文献解读HTML文件", Components.interfaces.nsIFilePicker.modeOpen);
+    // 文件选择框：用 Zotero 10 原生 filePicker.mjs（参考 zotero-plugin-toolkit 的写法）
+    var FilePickerBackend = ChromeUtils.importESModule(
+      "chrome://zotero/content/modules/filePicker.mjs").FilePicker;
+    var fp = new FilePickerBackend();
+    fp.init(win, "选择文献解读HTML文件", fp.modeOpen);
     fp.appendFilter("HTML", "*.html;*.htm");
 
-    var result = await new Promise(function (resolve) {
-      fp.open(resolve);
-    });
-
-    if (result !== Components.interfaces.nsIFilePicker.returnOK) return;
+    var result = await fp.show();
+    if (result !== fp.returnOK) return;
 
     try {
-      var htmlContent = await this._readFile(fp.file.path);
+      var picked = fp.file;
+      var pickedPath = (typeof picked === "string") ? picked : picked.path;
+      var htmlContent = await this._readFile(pickedPath);
       await this._createNote(parentItem, htmlContent, "文献解读");
       this._notify(win, "HTML报告已导入为笔记", "success");
     } catch (e) {
@@ -383,41 +384,34 @@ var TraeLitInterp = {
     var model = Zotero.Prefs.get("extensions.trae-lit-interp.model", true) || "deepseek-chat";
     var updateSource = Zotero.Prefs.get("extensions.trae-lit-interp.updateSource", true) || "";
 
-    var prompts = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
-      .createInstance(Components.interfaces.nsIPromptService);
-
-    var input = { value: apiKey };
-    var result = prompts.prompt(win, "DeepSeek API Key", "请输入 DeepSeek API Key（留空则使用手动模式）:", input, null, {});
-    if (result) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.apiKey", input.value, true);
+    // Zotero 10 已移除旧 XPCOM prompt-service，改用窗口原生 prompt（正常插件通用写法）
+    var input = win.prompt("DeepSeek API Key（留空则使用手动模式）:", apiKey);
+    if (input !== null) {
+      Zotero.Prefs.set("extensions.trae-lit-interp.apiKey", input, true);
     }
 
-    var pyInput = { value: pythonPath };
-    result = prompts.prompt(win, "Python 路径", "请输入 Python 路径（如 python, C:\\Python311\\python.exe）:", pyInput, null, {});
-    if (result) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.pythonPath", pyInput.value, true);
+    var pyInput = win.prompt("Python 路径（如 python, C:\\Python311\\python.exe）:", pythonPath);
+    if (pyInput !== null) {
+      Zotero.Prefs.set("extensions.trae-lit-interp.pythonPath", pyInput, true);
     }
 
-    var modelInput = { value: model };
-    result = prompts.prompt(win, "模型名称", "请输入模型名称（如 deepseek-chat）:", modelInput, null, {});
-    if (result) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.model", modelInput.value, true);
+    var modelInput = win.prompt("模型名称（如 deepseek-chat）:", model);
+    if (modelInput !== null) {
+      Zotero.Prefs.set("extensions.trae-lit-interp.model", modelInput, true);
     }
 
-    var baseInput = { value: apiBase };
-    result = prompts.prompt(win, "API Base URL", "请输入 API Base URL:", baseInput, null, {});
-    if (result) {
-      Zotero.Prefs.set("extensions.trae-lit-interp.apiBase", baseInput.value, true);
+    var baseInput = win.prompt("API Base URL:", apiBase);
+    if (baseInput !== null) {
+      Zotero.Prefs.set("extensions.trae-lit-interp.apiBase", baseInput, true);
     }
 
-    var updateInput = { value: updateSource };
-    result = prompts.prompt(win, "更新源路径", "请输入本地 update.json 路径\n（留空使用默认位置）:", updateInput, null, {});
-    if (result) {
-      if (updateInput.value.trim() === "") {
+    var updateInput = win.prompt("本地 update.json 路径（留空使用默认位置）:", updateSource);
+    if (updateInput !== null) {
+      if (updateInput.trim() === "") {
         var dataDir = Zotero.DataDirectory.dir;
-        updateInput.value = PathUtils.join(dataDir, "trae-lit-interp", "update.json");
+        updateInput = PathUtils.join(dataDir, "trae-lit-interp", "update.json");
       }
-      Zotero.Prefs.set("extensions.trae-lit-interp.updateSource", updateInput.value, true);
+      Zotero.Prefs.set("extensions.trae-lit-interp.updateSource", updateInput, true);
     }
   },
 
@@ -450,11 +444,9 @@ var TraeLitInterp = {
       var latestVersion = latest.version;
 
       if (this._compareVersions(latestVersion, this._version) > 0) {
-        var prompts = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
-          .createInstance(Components.interfaces.nsIPromptService);
-        var doUpdate = prompts.confirm(win,
-          "发现新版本",
-          "当前版本: " + this._version + "\n最新版本: " + latestVersion +
+        // 窗口原生 confirm（Zotero 10 已移除旧 XPCOM prompt-service）
+        var doUpdate = win.confirm(
+          "发现新版本\n\n当前版本: " + this._version + "\n最新版本: " + latestVersion +
           "\n\n更新链接:\n" + latest.update_link +
           "\n\n点击确定打开下载页面");
         if (doUpdate && latest.update_link) {
@@ -483,32 +475,35 @@ var TraeLitInterp = {
 
   /******************* Utilities *******************/
 
-  _runPython: function (args) {
+  _runPython: async function (args) {
     var pythonPath = Zotero.Prefs.get("extensions.trae-lit-interp.pythonPath", true) || "python";
 
-    return new Promise(function (resolve, reject) {
+    // 用 Firefox 平台 Subprocess 启动进程（Zotero 10 下 nsIProcess 旧 XPCOM 写法不可靠）。
+    // 注意：Subprocess 不搜索 PATH，command 必须是绝对路径，
+    // 所以相对命令（如 "python"）先用 where.exe 解析成全路径。
+    var { Subprocess } = ChromeUtils.importESModule(
+      "resource://gre/modules/Subprocess.sys.mjs");
+    var command = pythonPath;
+    var isAbs = /^[A-Za-z]:[\\\/]/.test(command) || command.startsWith("\\\\") || command.startsWith("/");
+    if (!isAbs) {
       try {
-        var file = Components.classes["@mozilla.org/file/local;1"]
-          .createInstance(Components.interfaces.nsIFile);
-        file.initWithPath(pythonPath);
-
-        var process = Components.classes["@mozilla.org/process/util;1"]
-          .createInstance(Components.interfaces.nsIProcess);
-        process.init(file);
-
-        process.runAsync(args, args.length, {
-          observe: function (subject, topic) {
-            if (topic === "process-finished") {
-              resolve(process.exitValue);
-            } else if (topic === "process-failed") {
-              reject(new Error("Process failed to start"));
-            }
-          }
+        var where = await Subprocess.call({
+          command: "C:\\Windows\\System32\\where.exe",
+          arguments: [command]
         });
+        var out = await where.stdout.read();
+        var first = new TextDecoder().decode(out).trim().split(/\r?\n/)[0];
+        await where.wait();
+        if (first) command = first;
       } catch (e) {
-        reject(e);
+        Zotero.debug("[Trae Lit Interp] where.exe resolve failed: " + e);
       }
+    }
+    var proc = await Subprocess.call({
+      command: command,
+      arguments: args
     });
+    return await proc.exitCode;
   },
 
   _readFile: async function (path) {
@@ -535,9 +530,13 @@ var TraeLitInterp = {
 
   _notify: function (win, message, type) {
     if (type === "error") {
-      var ps = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
-        .getService(Components.interfaces.nsIPromptService);
-      ps.alert(win, "Trae 文献解读", message);
+      // Zotero 10 (FF140) 已移除旧 XPCOM prompt-service，
+      // 改用窗口原生 alert（参考 Actions and Tags 等正常插件的写法）
+      try {
+        (win || Zotero.getMainWindow()).alert(message);
+      } catch (e) {
+        Zotero.debug("[Trae Lit Interp] alert failed: " + e);
+      }
     } else {
       var progressWin = new Zotero.ProgressWindow({ closeOnClick: true });
       progressWin.changeHeadline("Trae 文献解读");
@@ -547,11 +546,9 @@ var TraeLitInterp = {
   },
 
   _openFolder: function (path) {
+    // 参考 Better Notes 的写法：Zotero.File.reveal 在资源管理器中显示
     try {
-      var file = Components.classes["@mozilla.org/file/local;1"]
-        .createInstance(Components.interfaces.nsIFile);
-      file.initWithPath(path);
-      file.reveal();
+      Zotero.File.reveal(path);
     } catch (e) {
       Zotero.debug("[Trae Lit Interp] Cannot open folder: " + e);
     }
@@ -630,5 +627,6 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
 }
 
 function uninstall(data, reason) {
+  TraeLitInterp.removeFromAllWindows();
   Zotero.debug("[Trae Lit Interp] Uninstalled");
 }
