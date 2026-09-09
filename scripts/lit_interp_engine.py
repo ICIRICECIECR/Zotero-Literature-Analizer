@@ -469,7 +469,7 @@ details.accordion-item[open] .accordion-chevron { transform: rotate(180deg); }
 /* Figure blocks */
 .figure-block { margin: 16px 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: white; box-shadow: var(--shadow-sm); transition: box-shadow 0.2s; }
 .figure-block:hover { box-shadow: var(--shadow-md); }
-.figure-block img { width: 100%; display: block; }
+.figure-block img { width: 100%; display: block; max-height: 70vh; object-fit: contain; }
 .figure-caption { padding: 10px 16px; font-size: 12px; color: var(--text-secondary); background: #f8fafc; border-top: 1px solid var(--border); line-height: 1.5; }
 .figure-caption strong { color: var(--text); }
 
@@ -584,6 +584,12 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
 
         # Convert markdown bold to HTML
         content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', content)
+
+        # Convert markdown italic to HTML（单星号，在粗体之后处理）
+        content = re.sub(r'\*([^*\n]+)\*', r'<em>\1</em>', content)
+
+        # 过滤孤立的 # 标记行（LLM 输出的空标题，如 "###"）
+        content = re.sub(r'^#{1,6}[ \t]*$', '', content, flags=re.MULTILINE)
 
         # Convert markdown headers
         content = re.sub(r'^#### (.+)$', r'<h4>\1</h4>', content, flags=re.MULTILINE)
