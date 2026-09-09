@@ -594,16 +594,6 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
   </div>
 </details>'''
 
-    # Build figure blocks for section 4 if no inline match
-    figure_blocks = ""
-    if figures:
-        for fig in figures:
-            figure_blocks += f'''
-    <div class="figure-block">
-      <img src="data:{fig['mime']};base64,{fig['b64']}" alt="{fig['name']}">
-      <div class="figure-caption">{fig['name']} · {fig['caption']}</div>
-    </div>'''
-
     from datetime import datetime
     date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -661,8 +651,6 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
 </div>
 
 {accordion}
-
-{figures_section}
 
 <footer>
   <p>文献解读 · 按照「文献解读」标准执行 · 生成于 {date_str}</p>

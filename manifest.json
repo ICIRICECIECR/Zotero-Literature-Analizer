@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Trae Literature Interpretation",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "description": "Generate structured literature interpretation HTML reports from PDF attachments",
   "author": "Trae",
   "icons": {
