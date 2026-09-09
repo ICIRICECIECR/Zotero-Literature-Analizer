@@ -206,22 +206,11 @@ def _find_table_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
         y0 = max(0, min_y0 - 10)
         x1 = min(page_w, max_x1 + 10)
         y1 = min(page_h, max_y1 + 10)
-        
-        rect = fitz.Rect(x0, y0, x1, y1)
-        pix = page.get_pixmap(matrix=mat, clip=rect)
-        img_data = pix.tobytes("png")
-        return {
-            "page": page_idx,
-            "name": f"table{num}",
-            "caption": _clean_symbol(re.sub(r"\s+", " ", page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1))))[:200].strip(),
-            "b64": base64.b64encode(img_data).decode(),
-            "mime": "image/png"
-        }
-
-    # Fallback: caption might be above, table below
-    # Or caption below, table above
-    above_blocks = [b for b in blocks if b[3] <= cap_y0 and b[1] >= cap_y0 - 300]
-    if above_blocks:
+    else:
+        # Fallback: caption might be above, table below; or caption below, table above
+        above_blocks = [b for b in blocks if b[3] <= cap_y0 and b[1] >= cap_y0 - 300]
+        if not above_blocks:
+            return None
         min_y0 = min(b[1] for b in above_blocks)
         min_x0 = min(min(b[0] for b in above_blocks), cap_x0)
         max_x1 = max(max(b[2] for b in above_blocks), cap_x1)
@@ -230,19 +219,24 @@ def _find_table_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
         y0 = max(0, min_y0 - 10)
         x1 = min(page_w, max_x1 + 10)
         y1 = min(page_h, cap_y1 + 10)
-        
-        rect = fitz.Rect(x0, y0, x1, y1)
-        pix = page.get_pixmap(matrix=mat, clip=rect)
-        img_data = pix.tobytes("png")
-        return {
-            "page": page_idx,
-            "name": f"table{num}",
-            "caption": _clean_symbol(re.sub(r"\s+", " ", page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1))))[:200].strip(),
-            "b64": base64.b64encode(img_data).decode(),
-            "mime": "image/png"
-        }
 
-    return None
+    rect = fitz.Rect(x0, y0, x1, y1)
+    pix = page.get_pixmap(matrix=mat, clip=rect)
+    img_data = pix.tobytes("png")
+
+    # 表格区域完整文本：保留换行结构（每行一个记录），供 LLM 解读表格具体数据。
+    # caption 只取前 200 字符用于图片下方展示，text 存完整数据内容。
+    region_text = _clean_symbol(page.get_text("text", clip=rect)).strip()
+    caption = re.sub(r"\s+", " ", region_text)[:200].strip()
+
+    return {
+        "page": page_idx,
+        "name": f"table{num}",
+        "caption": caption,
+        "text": region_text[:3000],  # 表格数据内容（供 LLM 解读）
+        "b64": base64.b64encode(img_data).decode(),
+        "mime": "image/png"
+    }
 
 
 # ============================================================
@@ -386,10 +380,20 @@ def build_prompt(full_text, figure_info, max_text_len=12000, paper_type=None):
     if len(full_text) > max_text_len:
         text_preview += "\n\n[... 文本已截断 ...]"
 
-    fig_list = "\n".join([
-        f"- {f['name']}: {f['caption']}" 
-        for f in figure_info
-    ]) if figure_info else "（未检测到明确图表）"
+    # 拆分图与表：表格额外附上提取的数据文本，供 LLM 解读具体结果
+    fig_list_parts = []
+    table_list_parts = []
+    for f in figure_info:
+        if f['name'].lower().startswith('table'):
+            data = (f.get('text') or '').strip()
+            table_list_parts.append(
+                f"### {f['name']}: {f['caption']}\n{data if data else '（未提取到表格数据文本）'}"
+            )
+        else:
+            fig_list_parts.append(f"- {f['name']}: {f['caption']}")
+
+    fig_list = "\n".join(fig_list_parts) if fig_list_parts else "（未检测到明确图）"
+    table_list = "\n\n".join(table_list_parts) if table_list_parts else "（未检测到明确表格）"
 
     # 第 6 板块：识别出研究类型时用对应的专用评价框架，否则用通用 10 维度
     if paper_type:
@@ -431,7 +435,7 @@ def build_prompt(full_text, figure_info, max_text_len=12000, paper_type=None):
 研究类型、模型与对象、分组与对照、时间点、关键技术手段
 
 ## 4. 核心结果（按 Figure/Table 展开）
-以文献中呈现的每个 Figure/Table 为单位组织，包含：图表展示内容→观察现象→量化数据→统计意义
+以文献中呈现的每个 Figure/Table 为单位组织。对每个 Figure 说明其展示内容与观察现象；对每个 Table，务必结合下方「检测到的表格」中给出的数据内容逐项解读，说明关键数据、组间差异、趋势与统计意义，不要只复述表题。每个图表包含：展示内容→观察现象→量化数据→统计意义。
 
 ## 5. 讨论要点
 核心结论、与既往研究对比、机制解释
@@ -462,8 +466,11 @@ Introduction 叙事结构与段落逻辑功能、Discussion 组织策略、可�
 ## 论文全文
 {text_preview}
 
-## 检测到的图表
+## 检测到的图
 {fig_list}
+
+## 检测到的表格（含数据内容）
+{table_list}
 
 请按以上结构输出完整解读。"""
 
@@ -1148,12 +1155,26 @@ def _insert_figures_into_content(content, figures):
     #   随机子串，把新图插进旧图 base64 中间，导致旧图被截断损坏）
     inserts = []
     for fig in figures:
-        pattern = re.compile(
-            r'(Fig\.?\s*' + re.escape(fig['name'].replace('fig', '')) + 
-            r'|Figure\s*' + re.escape(fig['name'].replace('fig', '')) + 
-            r'|' + re.escape(fig['name']) + ')',
-            re.IGNORECASE
-        )
+        name = fig['name']
+        # 提取编号：fig1 -> 1, table2 -> 2
+        num_match = re.match(r'^(?:fig|table)(\d+)$', name, re.IGNORECASE)
+        num = num_match.group(1) if num_match else name
+
+        if name.lower().startswith('table'):
+            # 表格：匹配 "Table 2" / "Table2" / "table2"（大小写、空格均兼容）
+            pattern = re.compile(
+                r'(Table\.?\s*' + re.escape(num) + r'|' + re.escape(name) + r')',
+                re.IGNORECASE
+            )
+        else:
+            # 图：匹配 "Fig. 1" / "Figure 1" / "fig1"
+            pattern = re.compile(
+                r'(Fig\.?\s*' + re.escape(num) +
+                r'|Figure\s*' + re.escape(num) +
+                r'|' + re.escape(name) + r')',
+                re.IGNORECASE
+            )
+
         fig_html = f'''
 <div class="figure-block">
 <img src="data:{fig['mime']};base64,{fig['b64']}" alt="{fig['name']}">
