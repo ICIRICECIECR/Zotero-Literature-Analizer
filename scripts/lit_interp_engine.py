@@ -612,14 +612,6 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
                     f'<div class="hero-summary"><strong>解读日期：</strong>{date_str}　|　<strong>解读标准：</strong>10板块文献解读</div>')
 
     figures_section = ""
-    if figures:
-        figures_section = (
-            '<details class="accordion-item" id="sec-figures">'
-            '<summary class="accordion-header"><span class="accordion-num">F</span>'
-            '<span class="accordion-title">原文图表</span>'
-            '<svg class="accordion-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-            '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg></summary>'
-            f'<div class="accordion-content">{figure_blocks}</div></details>')
 
     html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
