@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.9",
+  _version: "1.0.10",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -294,7 +294,26 @@ var TraeLitInterp = {
 
     try {
       var pdfPath = await sel.attachment.getFilePathAsync();
-      var outputPath = PathUtils.join(this._scriptDir, "output_" + Date.now() + ".html");
+
+      // 从 Zotero 条目取论文元数据：用于文件命名 + Hero 展示
+      var item = sel.parentItem;
+      var paperTitle = (item.getField("title") || "").trim();
+      var creators = item.getCreators() || [];
+      var authorNames = [];
+      for (var c = 0; c < creators.length && c < 5; c++) {
+        var nm = creators[c].lastName || creators[c].name || "";
+        if (nm) authorNames.push(nm);
+      }
+      var authorsStr = authorNames.join(", ");
+      if (creators.length > 5) authorsStr += " 等";
+      var journalStr = item.getField("publicationTitle") || item.getField("journalAbbreviation") || "";
+      var doiStr = item.getField("DOI") || "";
+
+      // 命名：文献解读_{论文标题}.html（无标题时退回 PDF 文件名）
+      var nameBase = paperTitle || PathUtils.filename(pdfPath).replace(/\.pdf$/i, "");
+      nameBase = nameBase.replace(/[<>:"/\\|?*]/g, "").replace(/\s+/g, " ").trim();
+      if (nameBase.length > 80) nameBase = nameBase.substring(0, 80).trim();
+      var outputPath = PathUtils.join(PathUtils.parent(pdfPath), "文献解读_" + nameBase + ".html");
 
       var args = [
         PathUtils.join(this._scriptDir, "lit_interp_engine.py"),
@@ -303,7 +322,11 @@ var TraeLitInterp = {
         "--mode", "auto",
         "--api-key", apiKey,
         "--api-base", Zotero.Prefs.get("extensions.trae-lit-interp.apiBase", true),
-        "--model", Zotero.Prefs.get("extensions.trae-lit-interp.model", true)
+        "--model", Zotero.Prefs.get("extensions.trae-lit-interp.model", true),
+        "--title", paperTitle,
+        "--authors", authorsStr,
+        "--journal", journalStr,
+        "--doi", doiStr
       ];
 
       var exitCode = await this._runPython(args);
