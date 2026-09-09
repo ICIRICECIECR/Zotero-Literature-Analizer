@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.26",
+  _version: "1.0.27",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -309,11 +309,15 @@ var TraeLitInterp = {
       var journalStr = item.getField("publicationTitle") || item.getField("journalAbbreviation") || "";
       var doiStr = item.getField("DOI") || "";
 
-      // 命名：文献解读_{论文标题}.html（无标题时退回 PDF 文件名）
+      // 命名：文献解读_{论文标题}_{时间戳}.html（每次生成独立文件，保留历史版本）
       var nameBase = paperTitle || PathUtils.filename(pdfPath).replace(/\.pdf$/i, "");
       nameBase = nameBase.replace(/[<>:"/\\|?*]/g, "").replace(/\s+/g, " ").trim();
-      if (nameBase.length > 80) nameBase = nameBase.substring(0, 80).trim();
-      var outputPath = PathUtils.join(PathUtils.parent(pdfPath), "文献解读_" + nameBase + ".html");
+      if (nameBase.length > 60) nameBase = nameBase.substring(0, 60).trim();
+      var now = new Date();
+      var pad2 = function (n) { return n < 10 ? "0" + n : "" + n; };
+      var ts = "" + now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+               "_" + pad2(now.getHours()) + pad2(now.getMinutes());
+      var outputPath = PathUtils.join(PathUtils.parent(pdfPath), "文献解读_" + nameBase + "_" + ts + ".html");
 
       var args = [
         PathUtils.join(this._scriptDir, "lit_interp_engine.py"),
@@ -340,22 +344,11 @@ var TraeLitInterp = {
 
       progressWin.close();
 
-      // 挂为链接附件（文件留在 PDF 同目录）；重复生成时不重复挂
-      var alreadyLinked = false;
-      var attIDs = sel.parentItem.getAttachments();
-      for (var i = 0; i < attIDs.length; i++) {
-        var att = await Zotero.Items.getAsync(attIDs[i]);
-        if (att && att.linkMode === Zotero.Attachments.LINK_MODE_LINKED_FILE) {
-          var attPath = await att.getFilePathAsync();
-          if (attPath === outputPath) { alreadyLinked = true; break; }
-        }
-      }
-      if (!alreadyLinked) {
-        await Zotero.Attachments.linkFromFile({
-          file: outputPath,
-          parentItemID: sel.parentItem.id
-        });
-      }
+      // 挂为链接附件（文件名带时间戳，每次生成都是独立新文件，历史版本全部保留）
+      await Zotero.Attachments.linkFromFile({
+        file: outputPath,
+        parentItemID: sel.parentItem.id
+      });
       // 资源管理器弹出定位，方便直接双击打开
       this._openFolder(outputPath);
       this._notify(win, "文献解读已生成: " + outputPath, "success");
