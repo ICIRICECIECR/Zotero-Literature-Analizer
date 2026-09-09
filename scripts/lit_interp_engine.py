@@ -585,7 +585,8 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
                          r'<div class="callout callout-info">\1</div>',
                          content, flags=re.MULTILINE)
 
-        # Convert paragraphs
+        # Convert paragraphs（先过滤掉 LLM 用来分隔板块的 --- 水平线）
+        content = re.sub(r'^-{3,}[ \t]*$', '', content, flags=re.MULTILINE)
         content = re.sub(r'^([^<\n].+)$', r'<p>\1</p>', content, flags=re.MULTILINE)
 
         open_attr = " open" if i == 1 else ""
@@ -670,8 +671,8 @@ def _insert_figures_into_content(content, figures):
         )
         fig_html = f'''
 <div class="figure-block">
-  <img src="data:{fig['mime']};base64,{fig['b64']}" alt="{fig['name']}">
-  <div class="figure-caption">{fig['name']} · {fig['caption']}</div>
+<img src="data:{fig['mime']};base64,{fig['b64']}" alt="{fig['name']}">
+<div class="figure-caption">{fig['name']} · {fig['caption']}</div>
 </div>'''
         match = pattern.search(content)
         if match:
