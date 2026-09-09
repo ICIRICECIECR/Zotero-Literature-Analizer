@@ -304,7 +304,16 @@ Introduction 叙事结构与段落逻辑功能、Discussion 组织策略、可�
 临床实践指导价值、后续研究方向、转化潜力
 
 ## 10. 总结（逻辑链）
-将文献从背景→假设→设计→结果→结论的完整逻辑链以流程化方式呈现
+以"研究背景→研究假设→实验设计→核心结果→机制解释→结论与意义"为骨架，输出5-7个逻辑节点，深度剖析整篇文献的论证链条。严格按以下格式输出（每个节点固定3行：论断/证据/推进）：
+
+### 节点1：研究背景
+- 论断：该步骤的核心论断（1-2句，直接陈述）
+- 证据：支撑该论断的原文证据（引用具体 Fig/Table/量化数据/既往文献）
+- 推进：该步骤如何逻辑地导向下一步（指出推理桥梁或尚未解决的张力）
+
+（节点2-7 同上格式，节点标题依次为：研究假设、实验设计、核心结果、机制解释、结论与意义等）
+
+最后用一行 `> 关键前提与边界条件：...` 总结该逻辑链成立所依赖的关键前提与适用边界。
 
 ## 论文全文
 {text_preview}
@@ -492,11 +501,18 @@ details.accordion-item[open] .accordion-chevron { transform: rotate(180deg); }
 .overall-rating { margin-top: 14px; padding: 14px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; text-align: center; }
 .overall-rating.b { background: var(--amber-light); color: var(--amber); border: 1px solid #fcd34d; }
 
-/* Logic chain */
-.logic-chain { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.9; overflow-x: auto; white-space: pre; color: var(--text); }
-.logic-chain .step { color: var(--accent-dark); font-weight: 600; }
-.logic-chain .arrow { color: var(--text-muted); }
-.logic-chain .note { color: var(--red); }
+/* Logic flow（垂直流程图） */
+.logic-flow { margin: 16px 0; }
+.lc-node { background: var(--card-bg); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 14px 18px; box-shadow: var(--shadow-sm); }
+.lc-node-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.lc-num { font-family: var(--font-mono); font-weight: 700; font-size: 12px; color: white; background: var(--accent); width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.lc-title { font-size: 15px; font-weight: 700; color: var(--accent-dark); }
+.lc-row { display: flex; gap: 8px; margin: 6px 0; font-size: 13px; line-height: 1.7; color: var(--text); align-items: flex-start; }
+.lc-tag { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-top: 2px; }
+.lc-tag-claim { background: var(--accent-light); color: var(--accent-dark); }
+.lc-tag-evid { background: var(--green-light); color: var(--green); }
+.lc-tag-adv { background: var(--amber-light); color: var(--amber); }
+.lc-arrow { text-align: center; color: var(--accent); margin: 4px 0; }
 
 .writing-template { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; font-size: 13px; line-height: 1.7; margin: 10px 0; color: var(--text-secondary); font-style: italic; }
 .quote-block { border-left: 3px solid var(--accent); padding: 8px 14px; margin: 10px 0; font-size: 13px; font-style: italic; color: var(--text-secondary); background: var(--accent-light); border-radius: 0 6px 6px 0; }
@@ -526,6 +542,69 @@ SECTION_TITLES = [
     "临床/研究意义",
     "总结（逻辑链）"
 ]
+
+def _build_logic_flow(content):
+    """把 LLM 输出的逻辑链节点（### 节点N：标题 + - 论断/证据/推进）渲染为垂直流程图。
+
+    解析失败（LLM 未遵循格式）时返回 None，调用方回退为普通 markdown 渲染。
+    """
+    headers = list(re.finditer(r'^###\s*(.+?)$', content, re.MULTILINE))
+    if len(headers) < 2:
+        return None
+
+    nodes = []
+    spans = []
+    for idx, h in enumerate(headers):
+        start = h.end()
+        if idx + 1 < len(headers):
+            end = headers[idx + 1].start()
+        else:
+            # 最后一个节点：body 到第一个 > 行（rest，如关键前提 callout）或结尾
+            mrest = re.search(r'^>', content[start:], re.MULTILINE)
+            end = start + mrest.start() if mrest else len(content)
+        spans.append((h.start(), end))
+
+        title = h.group(1).strip()
+        mnum = re.match(r'^节点\s*(\d+)\s*[:：]\s*(.+)$', title)
+        num = mnum.group(1) if mnum else str(len(nodes) + 1)
+        if mnum:
+            title = mnum.group(2)
+        body = content[start:end]
+        rows = []
+        for tag, cls in (("论断", "lc-tag-claim"), ("证据", "lc-tag-evid"), ("推进", "lc-tag-adv")):
+            mrow = re.search(r'^[-*]\s*' + tag + r'\s*[:：]\s*(.+)$', body, re.MULTILINE)
+            if mrow:
+                rows.append((tag, cls, mrow.group(1).strip()))
+        if not rows:
+            return None  # 节点结构不完整，回退普通渲染
+        nodes.append((num, title, rows))
+
+    html = ['<div class="logic-flow">']
+    arrow = ('<div class="lc-arrow"><svg width="20" height="20" fill="none" stroke="currentColor" '
+             'viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" '
+             'stroke-width="2" d="M19 14l-7 7-7-7M12 3v18"/></svg></div>')
+    for idx, (num, title, rows) in enumerate(nodes):
+        if idx:
+            html.append(arrow)
+        html.append('<div class="lc-node"><div class="lc-node-head">'
+                    f'<span class="lc-num">{num}</span>'
+                    f'<span class="lc-title">{title}</span></div>')
+        for tag, cls, text in rows:
+            html.append(f'<div class="lc-row"><span class="lc-tag {cls}">{tag}</span>'
+                        f'<span>{text}</span></div>')
+        html.append('</div>')
+    html.append('</div>')
+
+    # 节点区间之外的其余内容（如 "> 关键前提与边界条件" callout）保留在流程图之后
+    rest_parts = []
+    prev = 0
+    for s, e in spans:
+        rest_parts.append(content[prev:s])
+        prev = e
+    rest_parts.append(content[prev:])
+    rest = "".join(rest_parts)
+    return "\n".join(html) + "\n" + rest
+
 
 def _build_meta_table(paper_title, meta):
     """用 Zotero 条目元数据构建论文基本信息表格（参考文件风格）。"""
@@ -578,6 +657,12 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
         # Insert figures in section 4 (核心结果)
         if i == 4 and figures:
             content = _insert_figures_into_content(content, figures)
+
+        # sec10 逻辑链：优先渲染为垂直流程图（解析失败回退普通 markdown）
+        if i == 10:
+            flow = _build_logic_flow(content)
+            if flow:
+                content = flow
 
         # Convert markdown tables to HTML
         content = _convert_markdown_tables(content)
