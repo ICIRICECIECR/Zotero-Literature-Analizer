@@ -139,7 +139,7 @@ def _find_figure_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
                     return {
                         "page": page_idx,
                         "name": f"fig{num}",
-                        "caption": page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1))[:200].strip(),
+                        "caption": re.sub(r"\s+", " ", page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1)))[:200].strip(),
                         "b64": base64.b64encode(img_data).decode(),
                         "mime": "image/png"
                     }
@@ -162,7 +162,7 @@ def _find_figure_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
         return {
             "page": page_idx,
             "name": f"fig{num}",
-            "caption": page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1))[:200].strip(),
+            "caption": re.sub(r"\s+", " ", page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1)))[:200].strip(),
             "b64": base64.b64encode(img_data).decode(),
             "mime": "image/png"
         }
@@ -197,7 +197,7 @@ def _find_table_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
         return {
             "page": page_idx,
             "name": f"table{num}",
-            "caption": page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1))[:200].strip(),
+            "caption": re.sub(r"\s+", " ", page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1)))[:200].strip(),
             "b64": base64.b64encode(img_data).decode(),
             "mime": "image/png"
         }
@@ -221,7 +221,7 @@ def _find_table_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
         return {
             "page": page_idx,
             "name": f"table{num}",
-            "caption": page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1))[:200].strip(),
+            "caption": re.sub(r"\s+", " ", page.get_text("text", clip=fitz.Rect(x0, y0, x1, y1)))[:200].strip(),
             "b64": base64.b64encode(img_data).decode(),
             "mime": "image/png"
         }
