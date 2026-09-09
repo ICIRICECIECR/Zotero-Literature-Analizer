@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.7",
+  _version: "1.0.8",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -314,11 +314,27 @@ var TraeLitInterp = {
         return;
       }
 
-      var htmlContent = await this._readFile(outputPath);
       progressWin.close();
 
-      await this._createNote(sel.parentItem, htmlContent, "文献解读");
-      this._notify(win, "文献解读已生成并保存为笔记", "success");
+      // 挂为链接附件（文件留在 PDF 同目录）；重复生成时不重复挂
+      var alreadyLinked = false;
+      var attIDs = sel.parentItem.getAttachments();
+      for (var i = 0; i < attIDs.length; i++) {
+        var att = await Zotero.Items.getAsync(attIDs[i]);
+        if (att && att.linkMode === Zotero.Attachments.LINK_MODE_LINKED_FILE) {
+          var attPath = await att.getFilePathAsync();
+          if (attPath === outputPath) { alreadyLinked = true; break; }
+        }
+      }
+      if (!alreadyLinked) {
+        await Zotero.Attachments.linkFromFile({
+          file: outputPath,
+          parentItemID: sel.parentItem.id
+        });
+      }
+      // 资源管理器弹出定位，方便直接双击打开
+      this._openFolder(outputPath);
+      this._notify(win, "文献解读已生成: " + outputPath, "success");
     } catch (e) {
       progressWin.close();
       Zotero.debug("[Trae Lit Interp] Error: " + e);
@@ -632,5 +648,7 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
 
 function uninstall(data, reason) {
   TraeLitInterp.removeFromAllWindows();
+  Zotero.debug("[Trae Lit Interp] Uninstalled");
+}
   Zotero.debug("[Trae Lit Interp] Uninstalled");
 }
