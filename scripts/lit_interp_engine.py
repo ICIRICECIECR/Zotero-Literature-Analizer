@@ -722,17 +722,17 @@ def _markdown_table_to_html(table_lines):
 # 7. Manual Mode: Generate Prompt + Template
 # ============================================================
 
-def generate_manual_output(full_text, figures, prompt_path, output_path):
+def generate_manual_output(full_text, figures, prompt_path, output_path, paper_title="文献解读"):
     """Generate prompt file and HTML template for manual mode."""
-    
+
     # Write prompt file
     prompt = build_prompt(full_text, figures)
     with open(prompt_path, "w", encoding="utf-8") as f:
         f.write(prompt)
-    
+
     # Generate HTML template with figures embedded but empty text sections
     sections = {i: {"title": SECTION_TITLES[i-1], "content": "（请将 LLM 解读结果粘贴到此板块）"} for i in range(1, 11)}
-    html = generate_html(sections, figures, paper_title="文献解读（模板）")
+    html = generate_html(sections, figures, paper_title=paper_title + "（模板）")
     
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -789,22 +789,34 @@ def main():
     parser.add_argument("--model", default="deepseek-chat")
     parser.add_argument("--prompt-file", default="prompt.txt")
     parser.add_argument("--response", help="LLM response file (for build-final mode)")
-    
+    # 论文元数据（由 Zotero 条目传入，用于 Hero 展示与文件命名）
+    parser.add_argument("--title", default="")
+    parser.add_argument("--authors", default="")
+    parser.add_argument("--journal", default="")
+    parser.add_argument("--doi", default="")
+
     args = parser.parse_args()
-    
+
+    meta = {
+        "authors": args.authors,
+        "journal": args.journal,
+        "doi": args.doi,
+    }
+    paper_title = args.title or "文献解读"
+
     if args.mode == "build-final":
         # Build final HTML from response
         if not args.response:
             print("ERROR: --response required for build-final mode", file=sys.stderr)
             sys.exit(1)
-        
+
         # Try to load figures from the PDF if provided
         figures = []
         if args.pdf:
             print("Extracting figures...")
             figures = detect_figures_and_tables(args.pdf)
-        
-        build_final_html(args.response, figures, args.output)
+
+        build_final_html(args.response, figures, args.output, paper_title, meta)
         return
     
     # For auto and manual modes, we need a PDF
