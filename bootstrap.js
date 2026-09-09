@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.8",
+  _version: "1.0.9",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -648,7 +648,5 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
 
 function uninstall(data, reason) {
   TraeLitInterp.removeFromAllWindows();
-  Zotero.debug("[Trae Lit Interp] Uninstalled");
-}
   Zotero.debug("[Trae Lit Interp] Uninstalled");
 }
