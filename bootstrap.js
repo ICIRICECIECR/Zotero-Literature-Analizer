@@ -9,7 +9,7 @@ var TraeLitInterp = {
   _initialized: false,
 
   _pluginID: "trae-lit-interp@example.com",
-  _version: "1.0.5",
+  _version: "1.0.6",
   _menuRegistered: false,
 
   init: function ({ id, version, rootURI }) {
@@ -504,7 +504,9 @@ var TraeLitInterp = {
       command: command,
       arguments: args
     });
-    return await proc.exitCode;
+    // exitCode 只是普通属性（初始 null），真正的退出码要等 wait() 返回
+    var result = await proc.wait();
+    return result.exitCode;
   },
 
   _readFile: async function (path) {
