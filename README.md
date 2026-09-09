@@ -174,4 +174,4 @@ with zipfile.ZipFile('trae-lit-interp.xpi', 'w', zipfile.ZIP_DEFLATED) as zf:
 
 ## Author
 
-Trae
+ICIRICECIECR
