@@ -550,6 +550,9 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
         title = sections.get(i, {}).get("title", SECTION_TITLES[i-1])
         content = sections.get(i, {}).get("content", "（待补充）")
 
+        # HTML 转义 LLM 原始内容（先 & 后 <），防止 p<0.05 / A & B 等文本破坏 HTML 结构
+        content = content.replace("&", "&amp;").replace("<", "&lt;")
+
         # sec1 论文基本信息：用 meta 构建结构化表格（参考文件风格）
         if i == 1:
             meta_table = _build_meta_table(paper_title, meta)
