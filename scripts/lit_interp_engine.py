@@ -683,8 +683,11 @@ def generate_html(sections, figures, paper_title="文献解读", meta=None):
 
 def _insert_figures_into_content(content, figures):
     """Insert figure blocks into section 4 content at appropriate positions."""
+    # 先在【原始文本】上定位所有图的插入点，再按位置倒序插入。
+    # （若边插边搜，后续图的匹配串如 "fig2" 会命中已插入 base64 图数据里的
+    #   随机子串，把新图插进旧图 base64 中间，导致旧图被截断损坏）
+    inserts = []
     for fig in figures:
-        # Try to find where the figure is mentioned in the content
         pattern = re.compile(
             r'(Fig\.?\s*' + re.escape(fig['name'].replace('fig', '')) + 
             r'|Figure\s*' + re.escape(fig['name'].replace('fig', '')) + 
@@ -696,13 +699,11 @@ def _insert_figures_into_content(content, figures):
 <img src="data:{fig['mime']};base64,{fig['b64']}" alt="{fig['name']}">
 <div class="figure-caption">{fig['name']} · {fig['caption']}</div>
 </div>'''
-        match = pattern.search(content)
-        if match:
-            pos = match.start()
-            content = content[:pos] + fig_html + "\n" + content[pos:]
-        else:
-            # Append at end
-            content += fig_html + "\n"
+        m = pattern.search(content)
+        inserts.append((m.start() if m else len(content), fig_html))
+    # 按位置从大到小插入，保证先插入的不影响前面的定位
+    for pos, fig_html in sorted(inserts, key=lambda t: -t[0]):
+        content = content[:pos] + fig_html + "\n" + content[pos:]
     return content
 
 
