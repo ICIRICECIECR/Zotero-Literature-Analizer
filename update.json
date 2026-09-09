@@ -3,6 +3,17 @@
     "trae-lit-interp@example.com": {
       "updates": [
         {
+          "version": "1.0.6",
+          "update_link": "https://github.com/ICIRICECIECR/Zotero-Literature-Analizer/releases/download/v1.0.6/trae-lit-interp-1.0.6.xpi",
+          "update_hash": "sha256:00bc1b402aaac4cd0925bbcfbf035e279d81d4b1f4df4ed863bb5637ed2236b3",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0",
+              "strict_max_version": "100.*"
+            }
+          }
+        },
+        {
           "version": "1.0.5",
           "update_link": "https://github.com/ICIRICECIECR/Zotero-Literature-Analizer/releases/download/v1.0.5/trae-lit-interp-1.0.5.xpi",
           "update_hash": "sha256:07121c757545115bd15ac291753c9f48f35cee5dd7e89b6ef9c65d02e6196e8a",
