@@ -380,20 +380,18 @@ def build_prompt(full_text, figure_info, max_text_len=12000, paper_type=None):
     if len(full_text) > max_text_len:
         text_preview += "\n\n[... 文本已截断 ...]"
 
-    # 拆分图与表：表格额外附上提取的数据文本，供 LLM 解读具体结果
-    fig_list_parts = []
-    table_list_parts = []
+    # 按原文顺序列出所有图表：表格附数据文本，图附 caption（保持 Fig/Table 交叉顺序）
+    chart_list_parts = []
     for f in figure_info:
         if f['name'].lower().startswith('table'):
             data = (f.get('text') or '').strip()
-            table_list_parts.append(
-                f"### {f['name']}: {f['caption']}\n{data if data else '（未提取到表格数据文本）'}"
+            chart_list_parts.append(
+                f"- {f['name']}: {f['caption']}\n  表格数据：{data if data else '（未提取到表格数据文本）'}"
             )
         else:
-            fig_list_parts.append(f"- {f['name']}: {f['caption']}")
+            chart_list_parts.append(f"- {f['name']}: {f['caption']}")
 
-    fig_list = "\n".join(fig_list_parts) if fig_list_parts else "（未检测到明确图）"
-    table_list = "\n\n".join(table_list_parts) if table_list_parts else "（未检测到明确表格）"
+    chart_list = "\n".join(chart_list_parts) if chart_list_parts else "（未检测到明确图表）"
 
     # 第 6 板块：识别出研究类型时用对应的专用评价框架，否则用通用 10 维度
     if paper_type:
@@ -435,7 +433,7 @@ def build_prompt(full_text, figure_info, max_text_len=12000, paper_type=None):
 研究类型、模型与对象、分组与对照、时间点、关键技术手段
 
 ## 4. 核心结果（按 Figure/Table 展开）
-以文献中呈现的每个 Figure/Table 为单位组织。对每个 Figure 说明其展示内容与观察现象；对每个 Table，务必结合下方「检测到的表格」中给出的数据内容逐项解读，说明关键数据、组间差异、趋势与统计意义，不要只复述表题。每个图表包含：展示内容→观察现象→量化数据→统计意义。
+按原文出现顺序，以每个 Figure/Table 为单位依次组织。对每个 Figure 说明其展示内容与观察现象；对每个 Table，务必结合下方「检测到的图表」中该表的数据内容逐项解读，说明关键数据、组间差异、趋势与统计意义，不要只复述表题。每个图表包含：展示内容→观察现象→量化数据→统计意义。
 
 ## 5. 讨论要点
 核心结论、与既往研究对比、机制解释
@@ -466,11 +464,8 @@ Introduction 叙事结构与段落逻辑功能、Discussion 组织策略、可�
 ## 论文全文
 {text_preview}
 
-## 检测到的图
-{fig_list}
-
-## 检测到的表格（含数据内容）
-{table_list}
+## 检测到的图表（按原文顺序，含表格数据）
+{chart_list}
 
 请按以上结构输出完整解读。"""
 
