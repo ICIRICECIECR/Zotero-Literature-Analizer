@@ -511,6 +511,23 @@ SECTION_TITLES = [
     "总结（逻辑链）"
 ]
 
+def _build_meta_table(paper_title, meta):
+    """用 Zotero 条目元数据构建论文基本信息表格（参考文件风格）。"""
+    rows = []
+    if paper_title and paper_title != "文献解读":
+        rows.append(f'<tr><td><strong>标题</strong></td><td>{paper_title}</td></tr>')
+    if meta.get("authors"):
+        rows.append(f'<tr><td><strong>作者</strong></td><td>{meta["authors"]}</td></tr>')
+    if meta.get("journal"):
+        rows.append(f'<tr><td><strong>期刊</strong></td><td>{meta["journal"]}</td></tr>')
+    if meta.get("doi"):
+        rows.append(f'<tr><td><strong>DOI</strong></td><td><code>{meta["doi"]}</code></td></tr>')
+    if not rows:
+        return ""
+    return ('<table class="data-table"><tr><th style="width:140px">项目</th><th>内容</th></tr>'
+            + "".join(rows) + '</table>')
+
+
 def generate_html(sections, figures, paper_title="文献解读", meta=None):
     """Generate self-contained HTML with base64-embedded images.
 
