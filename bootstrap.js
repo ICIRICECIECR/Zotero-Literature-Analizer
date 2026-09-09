@@ -156,7 +156,11 @@ var TraeLitInterp = {
     var menuPopup = doc.getElementById("zotero-itemmenu");
     Zotero.debug("[Trae Lit Interp] Legacy: menuPopup " + (menuPopup ? "found" : "NOT FOUND"));
     if (!menuPopup) return;
-    if (doc.getElementById("trae-lit-interp-menu")) return;
+
+    // 先移除旧插件实例可能残留的“僵尸”菜单节点（其监听器已随旧沙箱失效），
+    // 再重建并挂上当前实例的活监听器，否则菜单可见但点击无响应。
+    var stale = doc.getElementById("trae-lit-interp-menu");
+    if (stale) stale.remove();
 
     var menu = doc.createXULElement("menu");
     menu.setAttribute("id", "trae-lit-interp-menu");
@@ -217,6 +221,18 @@ var TraeLitInterp = {
     var doc = win.document;
     var menu = doc.getElementById("trae-lit-interp-menu");
     if (menu) menu.remove();
+  },
+
+  removeFromAllWindows: function () {
+    var wins = Zotero.getMainWindows();
+    if (!wins) return;
+    for (var i = 0; i < wins.length; i++) {
+      try {
+        this.removeFromWindow(wins[i]);
+      } catch (e) {
+        Zotero.debug("[Trae Lit Interp] removeFromWindow failed: " + e);
+      }
+    }
   },
 
   /******************* Core Logic *******************/
@@ -615,6 +631,7 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
     return;
   }
   Zotero.debug("[Trae Lit Interp] Shutting down");
+  TraeLitInterp.removeFromAllWindows();
   if (TraeLitInterp._menuRegistered && Zotero.MenuManager && Zotero.MenuManager.unregisterMenu) {
     try {
       Zotero.MenuManager.unregisterMenu("trae-lit-interp");
