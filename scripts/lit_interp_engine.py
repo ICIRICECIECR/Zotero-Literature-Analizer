@@ -37,6 +37,22 @@ except ImportError:
         sys.exit(1)
 
 
+# Symbol 字体 PUA 字符 → Unicode 希腊字母（PDF 常见 Symbol 字体编码问题，ToUnicode 缺失时提取成 PUA 区字符）
+_SYMBOL_MAP = {
+    0xF061: 'α', 0xF062: 'β', 0xF063: 'χ', 0xF064: 'δ', 0xF065: 'ε',
+    0xF066: 'φ', 0xF067: 'γ', 0xF068: 'η', 0xF069: 'ι', 0xF06A: 'ϑ',
+    0xF06B: 'κ', 0xF06C: 'λ', 0xF06D: 'μ', 0xF06E: 'ν', 0xF06F: 'ο',
+    0xF070: 'π', 0xF071: 'θ', 0xF072: 'ρ', 0xF073: 'σ', 0xF074: 'τ',
+    0xF075: 'υ', 0xF076: 'ϖ', 0xF077: 'ω', 0xF078: 'ξ', 0xF079: 'ψ',
+    0xF07A: 'ζ',
+}
+
+
+def _clean_symbol(text):
+    """把 Symbol 字体的 PUA 字符映射回正确的希腊字母。"""
+    return text.translate(_SYMBOL_MAP)
+
+
 # ============================================================
 # 1. PDF Text Extraction
 # ============================================================
@@ -46,7 +62,7 @@ def extract_text(pdf_path):
     doc = fitz.open(pdf_path)
     pages = []
     for page in doc:
-        pages.append(page.get_text())
+        pages.append(_clean_symbol(page.get_text()))
     full_text = "\n".join(pages)
     doc.close()
     return full_text, pages
