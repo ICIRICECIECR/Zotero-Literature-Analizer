@@ -468,7 +468,7 @@ def build_prompt(full_text, figure_info, max_text_len=12000, paper_type=None):
 研究类型、模型与对象、分组与对照、时间点、关键技术手段
 
 ## 4. 核心结果（按 Figure/Table 展开）
-按原文出现顺序，以每个 Figure/Table 为单位依次组织。对每个 Figure 说明其展示内容与观察现象；对每个 Table，务必结合下方「检测到的图表」中该表的数据内容逐项解读，说明关键数据、组间差异、趋势与统计意义，不要只复述表题。每个图表包含：展示内容→观察现象→量化数据→统计意义。
+严格按原文出现顺序，对每个 Figure/Table 用独立的三级标题（`### Fig N` 或 `### Table N`，独占一行，编号与下方「检测到的图表」一致）开头，标题下一段写该图表的解读文字。对每个 Figure 说明其展示内容与观察现象；对每个 Table，务必结合下方「检测到的图表」中该表的数据内容逐项解读，说明关键数据、组间差异、趋势与统计意义，不要只复述表题。每个图表的解读包含：展示内容→观察现象→量化数据→统计意义。禁止将 Table 与 Figure 分组，必须按原文顺序交叉输出。
 
 ## 5. 讨论要点
 核心结论、与既往研究对比、机制解释
@@ -1179,34 +1179,54 @@ def generate_compare_html(sections, papers, report_title="多篇文献对比分�
 
 
 def _insert_figures_into_content(content, figures):
-    """把检测到的图表按原文顺序集中排列，附加到第4板块解读文字之后。
+    """把每个图表的图片插入到其对应标题（### Fig N / ### Table N）之后。
 
-    不再按 LLM 输出文本就近匹配插入——LLM 输出顺序不可控，会把 Table/Figure
-    分组错乱（table 全排前）。改为按 figures 的检测顺序（页序+纵向位置）集中
-    呈现，保证 Fig/Table 严格按原文交叉顺序。
+    这样每个图表 = 标题 + 图片 + 解读文字，图片就近跟随解读、按原文顺序。
+    对没有匹配到标题的图表，按检测顺序集中排列在末尾兜底。
     """
     if not figures:
         return content
-    blocks = []
-    for fig in figures:
+
+    def build_block(fig):
         if fig.get('images'):
-            # 跨页表格：多张图竖着排在同一个 figure-block 里
             imgs_html = "".join(
                 f'<img src="data:{fig["mime"]};base64,{im["b64"]}" alt="{fig["name"]} (第{im["page"]+1}页)">'
                 for im in fig['images']
             )
-            blocks.append(
-                f'<div class="figure-block">\n{imgs_html}\n'
-                f'<div class="figure-caption">{fig["name"]} · {fig["caption"]}</div>\n</div>'
-            )
-        else:
-            blocks.append(
-                f'<div class="figure-block">\n'
+            return (f'<div class="figure-block">\n{imgs_html}\n'
+                    f'<div class="figure-caption">{fig["name"]} · {fig["caption"]}</div>\n</div>')
+        return (f'<div class="figure-block">\n'
                 f'<img src="data:{fig["mime"]};base64,{fig["b64"]}" alt="{fig["name"]}">\n'
-                f'<div class="figure-caption">{fig["name"]} · {fig["caption"]}</div>\n</div>'
-            )
-    gallery = "\n".join(blocks)
-    return content + "\n" + gallery
+                f'<div class="figure-caption">{fig["name"]} · {fig["caption"]}</div>\n</div>')
+
+    inserts = []      # (位置, 图片HTML)，按位置倒序插入
+    fallback = []     # 无匹配标题的图片，兜底追加到末尾
+    for fig in figures:
+        name = fig['name']
+        num_match = re.match(r'^(?:fig|table)(\d+)$', name, re.IGNORECASE)
+        num = num_match.group(1) if num_match else ''
+
+        if name.lower().startswith('table'):
+            pat = re.compile(r'^#{1,4}\s*Table\.?\s*' + re.escape(num) + r'\b',
+                             re.IGNORECASE | re.MULTILINE)
+        else:
+            pat = re.compile(r'^#{1,4}\s*(?:Fig\.?|Figure)\s*' + re.escape(num) + r'\b',
+                             re.IGNORECASE | re.MULTILINE)
+
+        m = pat.search(content)
+        if m:
+            # 图片插到标题之后（解读文字之前），实现「解读跟随图片」
+            inserts.append((m.end(), build_block(fig)))
+        else:
+            fallback.append(build_block(fig))
+
+    # 倒序插入，避免位置偏移
+    for pos, html in sorted(inserts, key=lambda t: -t[0]):
+        content = content[:pos] + "\n" + html + "\n" + content[pos:]
+
+    if fallback:
+        content = content + "\n" + "\n".join(fallback)
+    return content
 
 
 def _convert_markdown_tables(content):
