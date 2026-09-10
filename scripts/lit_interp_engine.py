@@ -75,60 +75,68 @@ def extract_text(pdf_path):
 def detect_figures_and_tables(pdf_path):
     """
     Detect figure and table regions in PDF using heuristic approach.
-    Returns list of dicts: {page, rect, name, caption}
+    支持跨页/整页大表格：主表 caption 与续表 "Table N. Cont." 合并为同一表格的多页图片。
+    Returns list of dicts（按原文顺序）: {page, name, caption, b64, mime}
+    跨页表格额外含 images 列表（每页一张图）。
     """
     doc = fitz.open(pdf_path)
     results = []
     seen_names = set()
 
+    # 预扫描：收集所有 fig/table caption（区分主表与续表）
+    fig_captions = []        # (page_idx, num, x0, y0, x1, y1)
+    table_main = {}          # num -> (page_idx, x0, y0, x1, y1, caption_text)
+    table_cont = {}          # num -> [page_idx, ...]
+
     for page_idx in range(len(doc)):
-        page = doc[page_idx]
-        page_w = page.rect.width
-        page_h = page.rect.height
-        blocks = page.get_text("blocks")
-        images = page.get_images(full=True)
-
-        for block in blocks:
+        for block in doc[page_idx].get_text("blocks"):
+            text = (block[4] if len(block) > 4 else "").strip()
             x0, y0, x1, y1 = block[0], block[1], block[2], block[3]
-            text = block[4] if len(block) > 4 else ""
-            text_stripped = text.strip()
 
-            # Detect figure caption: "Fig. 1", "Figure 1", etc.
-            fig_match = re.match(
-                r'^(?:Fig\.?\s*(\d+)|Figure\s*(\d+))[\.\s]', 
-                text_stripped, re.IGNORECASE
-            )
-            # Detect table caption: "Table 1", "Table 2", etc.
-            table_match = re.match(
-                r'^Table\s*(\d+)[\.\s]', 
-                text_stripped, re.IGNORECASE
-            )
+            fig_match = re.match(r'^(?:Fig\.?\s*(\d+)|Figure\s*(\d+))[\.\s]', text, re.IGNORECASE)
+            tbl_match = re.match(r'^Table\s*(\d+)[\.\s]', text, re.IGNORECASE)
 
             if fig_match:
                 num = fig_match.group(1) or fig_match.group(2)
-                name = f"fig{num}"
-                if name in seen_names:
-                    continue
-                crop = _find_figure_crop(
-                    page, x0, y0, x1, y1, images, blocks, page_idx, num, page_w, page_h
-                )
-                if crop:
-                    seen_names.add(name)
-                    results.append(crop)
+                fig_captions.append((page_idx, num, x0, y0, x1, y1))
+            elif tbl_match:
+                num = tbl_match.group(1)
+                is_cont = bool(re.search(r'\bcont\.?\b|continued', text, re.IGNORECASE))
+                if is_cont:
+                    table_cont.setdefault(num, []).append(page_idx)
+                elif num not in table_main:
+                    table_main[num] = (page_idx, x0, y0, x1, y1, text)
 
-            elif table_match:
-                num = table_match.group(1)
-                name = f"table{num}"
-                if name in seen_names:
-                    continue
-                crop = _find_table_crop(
-                    page, x0, y0, x1, y1, blocks, page_idx, num, page_w, page_h
-                )
-                if crop:
-                    seen_names.add(name)
-                    results.append(crop)
+    # 处理 figure
+    for (page_idx, num, bx0, by0, bx1, by1) in fig_captions:
+        name = f"fig{num}"
+        if name in seen_names:
+            continue
+        page = doc[page_idx]
+        crop = _find_figure_crop(page, bx0, by0, bx1, by1,
+                                 page.get_images(full=True), page.get_text("blocks"),
+                                 page_idx, num, page.rect.width, page.rect.height)
+        if crop:
+            seen_names.add(name)
+            crop["_y0"] = by0
+            results.append(crop)
+
+    # 处理 table（含跨页续表）
+    for num, (main_pi, cx0, cy0, cx1, cy1, cap_text) in table_main.items():
+        name = f"table{num}"
+        if name in seen_names:
+            continue
+        cont_pages = sorted(table_cont.get(num, []))
+        crop = _find_table_crop_multi(doc, main_pi, (cx0, cy0, cx1, cy1), cap_text, cont_pages, num)
+        if crop:
+            seen_names.add(name)
+            crop["_y0"] = cy0
+            results.append(crop)
 
     doc.close()
+
+    # 按 (页码, 纵向位置) 排序，保证 fig/table 按原文交叉顺序呈现
+    results.sort(key=lambda r: (r.get("page", 0), r.get("_y0", 0)))
     return results
 
 
@@ -186,55 +194,52 @@ def _find_figure_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
     return None
 
 
-def _find_table_crop(page, cap_x0, cap_y0, cap_x1, cap_y1, 
-                     blocks, page_idx, num, page_w, page_h):
-    """Find the table region for a table caption."""
+def _find_table_crop_multi(doc, main_page_idx, cap_bbox, cap_text, cont_pages, num):
+    """裁剪一个表格（可能跨多页）：主表页 + 续表页，合并为多图条目。
+
+    主表页裁剪 caption 到「下一个 caption」或页面底部（整页大表格不截断）；
+    续表页整页裁剪。返回 dict 含 images 列表（每页一张图）。
+    """
     zoom = 4
     mat = fitz.Matrix(zoom, zoom)
+    cap_x0, cap_y0, cap_x1, cap_y1 = cap_bbox
 
-    # Table content is usually below the caption (or the caption is above)
-    # Also handle case where caption is below the table
-    below_blocks = [b for b in blocks if b[1] >= cap_y1 and b[1] < cap_y1 + 400]
-    
-    if below_blocks:
-        min_x0 = min(min(b[0] for b in below_blocks), cap_x0)
-        min_y0 = cap_y0
-        max_x1 = max(max(b[2] for b in below_blocks), cap_x1)
-        max_y1 = max(b[3] for b in below_blocks)
-        
-        x0 = max(0, min_x0 - 10)
-        y0 = max(0, min_y0 - 10)
-        x1 = min(page_w, max_x1 + 10)
-        y1 = min(page_h, max_y1 + 10)
-    else:
-        # Fallback: caption might be above, table below; or caption below, table above
-        above_blocks = [b for b in blocks if b[3] <= cap_y0 and b[1] >= cap_y0 - 300]
-        if not above_blocks:
-            return None
-        min_y0 = min(b[1] for b in above_blocks)
-        min_x0 = min(min(b[0] for b in above_blocks), cap_x0)
-        max_x1 = max(max(b[2] for b in above_blocks), cap_x1)
-        
-        x0 = max(0, min_x0 - 10)
-        y0 = max(0, min_y0 - 10)
-        x1 = min(page_w, max_x1 + 10)
-        y1 = min(page_h, cap_y1 + 10)
+    images = []
+    text_parts = []
 
-    rect = fitz.Rect(x0, y0, x1, y1)
-    pix = page.get_pixmap(matrix=mat, clip=rect)
-    img_data = pix.tobytes("png")
+    # 主表页：caption 到下一个 caption（或页面底部）
+    main_page = doc[main_page_idx]
+    page_w = main_page.rect.width
+    page_h = main_page.rect.height
+    bottom_y = page_h
+    for block in main_page.get_text("blocks"):
+        t = (block[4] if len(block) > 4 else "").strip()
+        if block[1] > cap_y1 and re.match(r'^(?:Fig\.?\s*\d+|Figure\s*\d+|Table\s*\d+)', t, re.IGNORECASE):
+            bottom_y = block[1]
+            break
+    rect_main = fitz.Rect(0, max(0, cap_y0 - 10), page_w, min(page_h, bottom_y + 10))
+    pix = main_page.get_pixmap(matrix=mat, clip=rect_main)
+    images.append({"b64": base64.b64encode(pix.tobytes("png")).decode(), "page": main_page_idx})
+    text_parts.append(main_page.get_text("text", clip=rect_main))
 
-    # 表格区域完整文本：保留换行结构（每行一个记录），供 LLM 解读表格具体数据。
-    # caption 只取前 200 字符用于图片下方展示，text 存完整数据内容。
-    region_text = _clean_symbol(page.get_text("text", clip=rect)).strip()
-    caption = re.sub(r"\s+", " ", region_text)[:200].strip()
+    # 续表页：整页裁剪
+    for ci in cont_pages:
+        cpage = doc[ci]
+        rect_cont = fitz.Rect(0, 0, cpage.rect.width, cpage.rect.height)
+        pix = cpage.get_pixmap(matrix=mat, clip=rect_cont)
+        images.append({"b64": base64.b64encode(pix.tobytes("png")).decode(), "page": ci})
+        text_parts.append(cpage.get_text("text", clip=rect_cont))
+
+    region_text = _clean_symbol("\n".join(text_parts)).strip()
+    caption = _clean_symbol(re.sub(r"\s+", " ", cap_text))[:200].strip()
 
     return {
-        "page": page_idx,
+        "page": main_page_idx,
         "name": f"table{num}",
         "caption": caption,
         "text": region_text[:3000],  # 表格数据内容（供 LLM 解读）
-        "b64": base64.b64encode(img_data).decode(),
+        "images": images,             # 多页图片
+        "b64": images[0]["b64"],      # 兼容单图字段（取首页）
         "mime": "image/png"
     }
 
@@ -1170,7 +1175,19 @@ def _insert_figures_into_content(content, figures):
                 re.IGNORECASE
             )
 
-        fig_html = f'''
+        if fig.get('images'):
+            # 跨页表格：多张图竖着排在同一个 figure-block 里
+            imgs_html = "".join(
+                f'<img src="data:{fig["mime"]};base64,{im["b64"]}" alt="{fig["name"]} (第{im["page"]+1}页)">'
+                for im in fig['images']
+            )
+            fig_html = f'''
+<div class="figure-block">
+{imgs_html}
+<div class="figure-caption">{fig['name']} · {fig['caption']}</div>
+</div>'''
+        else:
+            fig_html = f'''
 <div class="figure-block">
 <img src="data:{fig['mime']};base64,{fig['b64']}" alt="{fig['name']}">
 <div class="figure-caption">{fig['name']} · {fig['caption']}</div>
