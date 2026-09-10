@@ -194,11 +194,35 @@ def _find_figure_crop(page, cap_x0, cap_y0, cap_x1, cap_y1,
     return None
 
 
+def _find_table_bottom(page, start_y, page_h):
+    """从 start_y 往下，找表格内容底部边界。
+
+    同时考虑两类边界：①遇到下一个图表 caption（Table/Fig）即结束；②块间距突变（> 阈值）
+    即结束。这样既能覆盖整页/跨页大表格，又不把下方正文或相邻表格裁进来。
+    """
+    blocks = sorted([b for b in page.get_text("blocks") if b[1] >= start_y], key=lambda b: b[1])
+    if not blocks:
+        return page_h
+    bottom = blocks[0][3]
+    prev_bottom = blocks[0][3]
+    for b in blocks[1:]:
+        t = (b[4] if len(b) > 4 else "").strip()
+        # 遇到下一个图表 caption（Table N / Fig N），表格结束
+        if re.match(r'^(?:Fig\.?\s*\d+|Figure\s*\d+|Table\s*\d+)', t, re.IGNORECASE):
+            break
+        gap = b[1] - prev_bottom
+        if gap > 25:  # 行间距一般 < 15pt，表格与正文之间通常 > 25pt
+            break
+        bottom = b[3]
+        prev_bottom = max(prev_bottom, b[3])
+    return bottom
+
+
 def _find_table_crop_multi(doc, main_page_idx, cap_bbox, cap_text, cont_pages, num):
     """裁剪一个表格（可能跨多页）：主表页 + 续表页，合并为多图条目。
 
-    主表页裁剪 caption 到「下一个 caption」或页面底部（整页大表格不截断）；
-    续表页整页裁剪。返回 dict 含 images 列表（每页一张图）。
+    裁剪边界由文本块间距确定，避免整页/跨页大表格截断，也避免把正文、页眉裁入。
+    返回 dict 含 images 列表（每页一张图）。
     """
     zoom = 4
     mat = fitz.Matrix(zoom, zoom)
@@ -207,25 +231,31 @@ def _find_table_crop_multi(doc, main_page_idx, cap_bbox, cap_text, cont_pages, n
     images = []
     text_parts = []
 
-    # 主表页：caption 到下一个 caption（或页面底部）
+    # 主表页：caption 到表格内容底部（块间距判断，不裁进正文）
     main_page = doc[main_page_idx]
     page_w = main_page.rect.width
     page_h = main_page.rect.height
-    bottom_y = page_h
-    for block in main_page.get_text("blocks"):
-        t = (block[4] if len(block) > 4 else "").strip()
-        if block[1] > cap_y1 and re.match(r'^(?:Fig\.?\s*\d+|Figure\s*\d+|Table\s*\d+)', t, re.IGNORECASE):
-            bottom_y = block[1]
-            break
-    rect_main = fitz.Rect(0, max(0, cap_y0 - 10), page_w, min(page_h, bottom_y + 10))
+    main_bottom = _find_table_bottom(main_page, cap_y1, page_h)
+    rect_main = fitz.Rect(0, max(0, cap_y0 - 8), page_w, min(page_h, main_bottom + 8))
     pix = main_page.get_pixmap(matrix=mat, clip=rect_main)
     images.append({"b64": base64.b64encode(pix.tobytes("png")).decode(), "page": main_page_idx})
     text_parts.append(main_page.get_text("text", clip=rect_main))
 
-    # 续表页：整页裁剪
+    # 续表页：从 "Table N. Cont." 标题开始（跳过页眉），到表格底部
     for ci in cont_pages:
         cpage = doc[ci]
-        rect_cont = fitz.Rect(0, 0, cpage.rect.width, cpage.rect.height)
+        cpw = cpage.rect.width
+        cph = cpage.rect.height
+        cblocks = sorted(cpage.get_text("blocks"), key=lambda b: b[1])
+        c_top = cblocks[0][1] if cblocks else 0
+        # 优先从续表标题开始，跳过页眉（如期刊名、页码）
+        for b in cblocks:
+            t = (b[4] if len(b) > 4 else "").strip()
+            if re.match(r'^Table\s*\d+', t, re.IGNORECASE):
+                c_top = b[1]
+                break
+        cbottom = _find_table_bottom(cpage, c_top, cph)
+        rect_cont = fitz.Rect(0, max(0, c_top - 8), cpw, min(cph, cbottom + 8))
         pix = cpage.get_pixmap(matrix=mat, clip=rect_cont)
         images.append({"b64": base64.b64encode(pix.tobytes("png")).decode(), "page": ci})
         text_parts.append(cpage.get_text("text", clip=rect_cont))
@@ -1149,55 +1179,34 @@ def generate_compare_html(sections, papers, report_title="多篇文献对比分�
 
 
 def _insert_figures_into_content(content, figures):
-    """Insert figure blocks into section 4 content at appropriate positions."""
-    # 先在【原始文本】上定位所有图的插入点，再按位置倒序插入。
-    # （若边插边搜，后续图的匹配串如 "fig2" 会命中已插入 base64 图数据里的
-    #   随机子串，把新图插进旧图 base64 中间，导致旧图被截断损坏）
-    inserts = []
+    """把检测到的图表按原文顺序集中排列，附加到第4板块解读文字之后。
+
+    不再按 LLM 输出文本就近匹配插入——LLM 输出顺序不可控，会把 Table/Figure
+    分组错乱（table 全排前）。改为按 figures 的检测顺序（页序+纵向位置）集中
+    呈现，保证 Fig/Table 严格按原文交叉顺序。
+    """
+    if not figures:
+        return content
+    blocks = []
     for fig in figures:
-        name = fig['name']
-        # 提取编号：fig1 -> 1, table2 -> 2
-        num_match = re.match(r'^(?:fig|table)(\d+)$', name, re.IGNORECASE)
-        num = num_match.group(1) if num_match else name
-
-        if name.lower().startswith('table'):
-            # 表格：匹配 "Table 2" / "Table2" / "table2"（大小写、空格均兼容）
-            pattern = re.compile(
-                r'(Table\.?\s*' + re.escape(num) + r'|' + re.escape(name) + r')',
-                re.IGNORECASE
-            )
-        else:
-            # 图：匹配 "Fig. 1" / "Figure 1" / "fig1"
-            pattern = re.compile(
-                r'(Fig\.?\s*' + re.escape(num) +
-                r'|Figure\s*' + re.escape(num) +
-                r'|' + re.escape(name) + r')',
-                re.IGNORECASE
-            )
-
         if fig.get('images'):
             # 跨页表格：多张图竖着排在同一个 figure-block 里
             imgs_html = "".join(
                 f'<img src="data:{fig["mime"]};base64,{im["b64"]}" alt="{fig["name"]} (第{im["page"]+1}页)">'
                 for im in fig['images']
             )
-            fig_html = f'''
-<div class="figure-block">
-{imgs_html}
-<div class="figure-caption">{fig['name']} · {fig['caption']}</div>
-</div>'''
+            blocks.append(
+                f'<div class="figure-block">\n{imgs_html}\n'
+                f'<div class="figure-caption">{fig["name"]} · {fig["caption"]}</div>\n</div>'
+            )
         else:
-            fig_html = f'''
-<div class="figure-block">
-<img src="data:{fig['mime']};base64,{fig['b64']}" alt="{fig['name']}">
-<div class="figure-caption">{fig['name']} · {fig['caption']}</div>
-</div>'''
-        m = pattern.search(content)
-        inserts.append((m.start() if m else len(content), fig_html))
-    # 按位置从大到小插入，保证先插入的不影响前面的定位
-    for pos, fig_html in sorted(inserts, key=lambda t: -t[0]):
-        content = content[:pos] + fig_html + "\n" + content[pos:]
-    return content
+            blocks.append(
+                f'<div class="figure-block">\n'
+                f'<img src="data:{fig["mime"]};base64,{fig["b64"]}" alt="{fig["name"]}">\n'
+                f'<div class="figure-caption">{fig["name"]} · {fig["caption"]}</div>\n</div>'
+            )
+    gallery = "\n".join(blocks)
+    return content + "\n" + gallery
 
 
 def _convert_markdown_tables(content):
